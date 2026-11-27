@@ -46,7 +46,7 @@ infrastructure these examples add.
 
 - **Two-pass deploy.** `infra/` provisions the cloud foundation; the Helm scripts install the LangSmith chart.
 - **Provider-specific secret handling.** AWS application secrets flow from SSM Parameter Store through [External Secrets Operator](https://external-secrets.io/); Azure application secrets flow from Key Vault through `infra/scripts/create-k8s-secrets.sh`; GCP application secrets flow from Secret Manager into generated Helm values. Terraform also creates Kubernetes Secrets containing infrastructure credentials on all three clouds, so those values remain in Terraform state — protect the state backend. See the [secret flow and state table](modules/README.md#secret-flow-and-state).
-- **Sizing profiles:** `minimum`, `dev`, `production`, and `production-large` — selected with a single variable. Setting `sizing_profile = "default"` skips the sizing overlay; the provider's base values and other overrides still apply.
+- **Sizing:** on AWS, one sizing for every install, the scale guide's medium reads, medium writes pattern. Azure and GCP keep the `minimum`, `dev`, `production`, and `production-large` profiles, selected with `sizing_profile`; `"default"` skips the sizing overlay.
 - **Enterprise feature toggles:**
   - LangGraph Platform / Deployments
   - Agent Builder
@@ -122,10 +122,9 @@ and `CHART_VERSION` can only narrow the pin to a 0.17 patch:
 cd modules/aws && make apply && make init-values && CHART_VERSION="0.17.0" make deploy
 ```
 
-Read [MIGRATION-0.16-to-0.17.md](MIGRATION-0.16-to-0.17.md) before upgrading an existing
-install. An install still on chart 0.15 also needs
-[MIGRATION-0.15-to-0.16.md](MIGRATION-0.15-to-0.16.md), because those schema changes
-carry over to 0.17.
+### Version upgrades
+
+For version upgrades, follow the [official LangSmith upgrade guide](https://docs.langchain.com/langsmith/self-host-upgrades) and contact [LangChain Support](https://support.langchain.com) for assistance.
 
 ### Maintenance branches
 

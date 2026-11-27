@@ -108,13 +108,6 @@ VPC [icon: aws-vpc, color: blue] {
         langsmith-standalone-polly-api-server [icon: server, color: gray]
         langsmith-standalone-polly-queue [icon: server, color: gray]
 
-        // Optional chart-managed stores when in-cluster storage is selected
-        langsmith-standalone-fleet-postgres [icon: database, color: red]
-        langsmith-standalone-fleet-redis [icon: database, color: red]
-        langsmith-standalone-insights-postgres [icon: database, color: red]
-        langsmith-standalone-insights-redis [icon: database, color: red]
-        langsmith-standalone-polly-postgres [icon: database, color: red]
-        langsmith-standalone-polly-redis [icon: database, color: red]
       }
     }
 

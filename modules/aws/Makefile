@@ -162,7 +162,7 @@ clean: ## Remove local generated files (run after make destroy and make purge-se
 test-e2e: ## Run E2E gateway tests (ALB or Envoy Gateway)
 	$(HELM_DIR)/scripts/test-e2e.sh
 
-test-values: ## Render the Helm values for every sizing profile and check queue autoscaling (needs helm)
+test-values: ## Render the Helm values and check sizing, autoscaling and chart-default requests (needs helm)
 	$(HELM_DIR)/scripts/test-values.sh
 
 test-permutations: ## Run permutation tests sequentially on current cluster (ARGS="1 2 5" for subset)

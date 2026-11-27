@@ -130,7 +130,7 @@ AWS-specific: IRSA for cloud access, SSM Parameter Store → ESO → `langsmith-
 - **What**: Kubernetes Event-driven Autoscaling — scales `queue`, `ingest-queue`, and the SmithDB compaction worker on their backlog and CPU (and memory for the two queues)
 - **Namespace**: `keda`
 - **Deployed by**: Terraform `k8s-bootstrap` module, on every install
-- **Required for**: every install. The base values and every sizing profile turn it on for those three services, and the Deployments operator also uses it. Sizing profiles set their own replica ranges.
+- **Required for**: every install. The base values turn it on for those three services and set their replica ranges, and the Deployments operator also uses it.
 
 ### cert-manager
 - **What**: Automates TLS certificate issuance and renewal

@@ -737,10 +737,9 @@ module "cert_manager" {
 # wires the validated cert into the ALB HTTPS listener.
 
 locals {
-  insights_enabled          = var.enable_insights || var.enable_standalone_insights
-  insights_external_storage = var.enable_standalone_insights || (var.enable_insights && var.insights_storage == "external")
-  polly_enabled             = var.enable_polly || var.enable_standalone_polly
-  polly_external_storage    = var.enable_standalone_polly || (var.enable_polly && var.polly_storage == "external")
+  # Engine and Insights share the engineInsightsAgent deployment, so Engine alone
+  # also needs the Insights database and Redis index.
+  engine_insights_agent_enabled = var.enable_insights || var.enable_engine
 
   dns_enabled = var.langsmith_domain != "" && var.acm_certificate_arn == ""
 }
@@ -1089,9 +1088,9 @@ resource "terraform_data" "postgres_connection_url_revision" {
 resource "terraform_data" "standalone_db" {
   for_each = {
     for k, v in {
-      fleet    = var.enable_fleet && var.fleet_storage == "external"
-      polly    = local.polly_external_storage
-      insights = local.insights_external_storage
+      fleet    = var.enable_fleet
+      polly    = var.enable_polly
+      insights = local.engine_insights_agent_enabled
     } : k => v if v
   }
 
@@ -1190,7 +1189,7 @@ removed {
 # apply so their pods load the new connection URLs.
 
 resource "kubernetes_secret" "fleet_postgres" {
-  count = var.enable_fleet && var.fleet_storage == "external" ? 1 : 0
+  count = var.enable_fleet ? 1 : 0
   metadata {
     name      = "langsmith-fleet-postgres"
     namespace = var.langsmith_namespace
@@ -1203,7 +1202,7 @@ resource "kubernetes_secret" "fleet_postgres" {
 }
 
 resource "kubernetes_secret" "fleet_redis" {
-  count = var.enable_fleet && var.fleet_storage == "external" ? 1 : 0
+  count = var.enable_fleet ? 1 : 0
   metadata {
     name      = "langsmith-fleet-redis"
     namespace = var.langsmith_namespace
@@ -1216,7 +1215,7 @@ resource "kubernetes_secret" "fleet_redis" {
 }
 
 resource "kubernetes_secret" "standalone_polly_postgres" {
-  count = local.polly_external_storage ? 1 : 0
+  count = var.enable_polly ? 1 : 0
   metadata {
     name      = "langsmith-polly-postgres"
     namespace = var.langsmith_namespace
@@ -1229,7 +1228,7 @@ resource "kubernetes_secret" "standalone_polly_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_polly_redis" {
-  count = local.polly_external_storage ? 1 : 0
+  count = var.enable_polly ? 1 : 0
   metadata {
     name      = "langsmith-polly-redis"
     namespace = var.langsmith_namespace
@@ -1242,7 +1241,7 @@ resource "kubernetes_secret" "standalone_polly_redis" {
 }
 
 resource "kubernetes_secret" "standalone_insights_postgres" {
-  count = local.insights_external_storage ? 1 : 0
+  count = local.engine_insights_agent_enabled ? 1 : 0
   metadata {
     name      = "langsmith-insights-postgres"
     namespace = var.langsmith_namespace
@@ -1255,7 +1254,7 @@ resource "kubernetes_secret" "standalone_insights_postgres" {
 }
 
 resource "kubernetes_secret" "standalone_insights_redis" {
-  count = local.insights_external_storage ? 1 : 0
+  count = local.engine_insights_agent_enabled ? 1 : 0
   metadata {
     name      = "langsmith-insights-redis"
     namespace = var.langsmith_namespace

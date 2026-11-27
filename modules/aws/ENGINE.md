@@ -58,7 +58,7 @@ model credentials.
 |---|---|
 | `setup-env.sh` | `engine-encryption-key` (a Fernet key) and `engine-usage-signing-secret` (64 hex characters) in SSM under `/langsmith/<name_prefix>-<environment>/`, exported as `TF_VAR_langsmith_engine_encryption_key` and `TF_VAR_langsmith_engine_usage_signing_secret`. The script creates each key when it is not in SSM, also while `enable_engine = false`, as it does for the other add-on keys. On later runs, it uses the stored values. `manage-ssm.sh` lists both keys and treats them as stable keys. |
 | `terraform apply` | The IAM role `<name_prefix>-<environment>-engine-irsa`. Its trust policy allows only the two Engine service accounts in `langsmith_namespace` (`StringEquals` on `sub` and `aud`). For the default release name, these are `langsmith-standalone-insights-api-server` and `langsmith-standalone-insights-queue`. For another `langsmith_release_name`, Terraform uses the chart's naming rule. [Engine IAM role](#engine-iam-role) lists its policies. The output `engine_irsa_role_arn` holds the role ARN. |
-| `init-values.sh` | `langsmith-values-engine.yaml`, copied from `helm/values/examples/`: `engine.enabled`, `engine.workloadIdentityProviders: [bedrock]`, and the sizing of the shared deployment. In `langsmith-values-overrides.yaml`: the `eks.amazonaws.com/role-arn` annotation for the Engine role on `engineInsightsAgent.apiServer` and `engineInsightsAgent.queue`, and `engine.sandboxTenantId` and `engine.intelligenceBaseUrl` when you set them. |
+| `init-values.sh` | `langsmith-values-engine.yaml`, copied from `helm/values/examples/`: `engine.enabled`, `engine.workloadIdentityProviders: [bedrock]`, and the sizing of the shared deployment. In `langsmith-values-overrides.yaml`: the default requests and limits of the shared deployment, the `eks.amazonaws.com/role-arn` annotation for the Engine role on `engineInsightsAgent.apiServer` and `engineInsightsAgent.queue`, and `engine.sandboxTenantId` and `engine.intelligenceBaseUrl` when you set them. |
 | `apply-eso.sh` | The `engine_encryption_key` and `engine_usage_signing_secret` keys in the `langsmith-config` Secret, from the two SSM parameters. During a key rotation, also `engine_encryption_key_previous` (see [Keys](#keys)). The script adds each key only when its SSM parameter exists. |
 | `deploy.sh` | Stops when `langsmith-config` does not have both keys. Stops when `RELEASE_NAME` or `NAMESPACE` is not the same as `langsmith_release_name` or `langsmith_namespace`, because the role trusts only those names. Loads `langsmith-values-engine.yaml` before the Insights values files, so the Insights settings win on the shared deployment. Waits for `standalone-insights-api-server`. |
 
@@ -152,20 +152,10 @@ option.
 
 ## Storage
 
-Engine stores its state in the PostgreSQL and Redis of the shared deployment:
-
-- **Default.** When Insights is off, or `insights_storage = "in-cluster"`, Engine
-  uses the chart's in-cluster PostgreSQL and Redis StatefulSets
-  (`langsmith-standalone-insights-postgres` and `-redis`). Each has an 8Gi PVC on the
-  default StorageClass. With `create_gp3_storage_class = true`, that class is `gp3`.
-- **Insights on external storage.** This applies with `insights_storage = "external"`
-  or `enable_standalone_insights = true`. Engine then uses the `langsmith_insights`
-  database on the shared RDS instance. It also uses Redis DB 3 on the shared
-  ElastiCache instance.
-
-A change to `enable_insights`, `enable_standalone_insights`, or `insights_storage`
-can move Engine to the other storage. Engine does not copy its data to the new
-storage.
+Engine stores its state in the PostgreSQL and Redis of the deployment it shares with
+Insights: the `langsmith_insights` database on the shared RDS instance and DB index 3
+on the shared ElastiCache, whether or not Insights is on. Terraform creates both when
+`enable_engine` or `enable_insights` is true.
 
 ## Sandbox workspace
 
@@ -270,5 +260,5 @@ same four deployments. See the
 Set `enable_engine = false`, then run `make apply && make init-values && make deploy`.
 Terraform deletes the Engine role. `deploy.sh` skips `langsmith-values-engine.yaml`
 and reports it as present but not enabled. The two SSM parameters and the two keys
-in `langsmith-config` stay. With Insights off, Kubernetes keeps the PVCs of the
-in-cluster PostgreSQL and Redis. Delete them when you do not need the data.
+in `langsmith-config` stay. With Insights off, Terraform also drops the
+`langsmith_insights` Secrets; the database stays on RDS until you drop it.

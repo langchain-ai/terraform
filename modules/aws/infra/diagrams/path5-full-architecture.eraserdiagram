@@ -267,17 +267,9 @@ AWS Account [icon: aws, color: blue] {
 
           // ── In-cluster data stores (dev/POC ONLY) ─────
           // NOT for production — single pod, no HA, no backups
-          // Replace with RDS + ElastiCache + Managed ClickHouse for prod
+          // Replace with Managed ClickHouse for prod
           In-Cluster Data Stores [color: red] {
             langsmith-clickhouse [icon: database, color: red]
-            langsmith-redis [icon: database, color: red]
-            langsmith-postgres [icon: database, color: red]
-            langsmith-standalone-fleet-postgres [icon: database, color: red]
-            langsmith-standalone-fleet-redis [icon: database, color: red]
-            langsmith-standalone-polly-postgres [icon: database, color: red]
-            langsmith-standalone-polly-redis [icon: database, color: red]
-            langsmith-standalone-insights-postgres [icon: database, color: red]
-            langsmith-standalone-insights-redis [icon: database, color: red]
           }
 
         }

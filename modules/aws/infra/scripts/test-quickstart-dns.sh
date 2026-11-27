@@ -76,8 +76,8 @@ trap 'rm -rf "$TMP"' EXIT
 # blank, the DNS module activates and dns_choice is consumed (1=new, 2=reuse).
 write_fresh_answers() {
   local file="$1" acm_arn="$2" domain="$3" dns_choice="${4:-}"
-  local invalid_zone_id="${5:-}" zone_id="${6:-}" invalid_bounds="${7:-false}" sizing="${8:-}"
-  local smithdb_answer="${9:-}"
+  local invalid_zone_id="${5:-}" zone_id="${6:-}" invalid_bounds="${7:-false}"
+  local smithdb_answer="${8:-}"
   {
     printf '%s\n' "1"             # Deployment profile: dev
     printf '\n'                    # Name prefix
@@ -113,7 +113,6 @@ write_fresh_answers() {
         printf '%s\n' "$zone_id"
       fi
     fi
-    printf '%s\n' "$sizing"        # Sizing: dev unless overridden
     if [[ "$smithdb_answer" == "n" ]]; then
       :                            # SmithDB declined: no capacity questions
     elif [[ "$invalid_bounds" == "true" ]]; then
@@ -158,7 +157,6 @@ write_update_defaults() {
     printf '\n' # Certificate management
     printf '\n' # Route 53 choice
     printf '\n' # Existing zone ID
-    printf '\n' # Sizing
     if [[ "$smithdb" == "true" ]]; then
       printf '\n\n\n' # SmithDB min, max, disk
     fi
@@ -292,30 +290,33 @@ run_wizard "SmithDB update replaces legacy null settings" "$SMITHDB_INFRA" "$TMP
 has_line "legacy null instance type becomes m6a.4xlarge" "$SMITHDB_INFRA/terraform.tfvars" 'smithdb_node_instance_type            = "m6a.4xlarge"'
 has_line "legacy null maximum becomes 5" "$SMITHDB_INFRA/terraform.tfvars" "smithdb_node_max_count                = 5"
 
-echo "7. SmithDB node defaults are the same for every pod sizing"
-for sizing in dev production-large; do
-  case "$sizing" in
-    dev) sizing_choice=2 ;;
-    production-large) sizing_choice=4 ;;
-  esac
-  DEFAULT_INFRA="$TMP/smithdb-$sizing-defaults"
-  write_fresh_answers "$TMP/$sizing.answers" "" "langsmith.example.com" 2 "" Z1ABCDEF123456 false "$sizing_choice"
-  run_wizard "SmithDB $sizing defaults complete" "$DEFAULT_INFRA" "$TMP/$sizing.answers" "$TMP/$sizing.log"
-  has_line "LangSmith type is independent for $sizing" "$DEFAULT_INFRA/terraform.tfvars" '    instance_types = ["m6a.2xlarge"]'
-  has_line "SmithDB type is m6a.4xlarge for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_instance_type            = "m6a.4xlarge"'
-  has_line "SmithDB initial capacity for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_min_count                = 2'
-  has_line "SmithDB ceiling is 5 for $sizing" "$DEFAULT_INFRA/terraform.tfvars" "smithdb_node_max_count                = 5"
-  log_lacks "no claim that the sizing profile picks the SmithDB node type for $sizing" "$TMP/$sizing.log" "selects the instance type automatically"
-  log_lacks "$sizing does not warn about the SmithDB node type" "$TMP/$sizing.log" "gives SmithDB a tier that needs"
-  log_has "QuickStart points $sizing to the SmithDB scale-up steps" "$TMP/$sizing.log" "describes scaling up to the medium or large tier"
-  has_line "SmithDB enabled by default for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'enable_smithdb                        = true'
-  has_line "ingestion enabled by default for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_ingestion_enabled             = true'
-  has_line "a new setup serves reads from SmithDB for $sizing" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_query_enabled                 = true'
-done
+echo "7. A new setup gets the SmithDB defaults and no sizing profile"
+DEFAULT_INFRA="$TMP/smithdb-defaults"
+write_fresh_answers "$TMP/defaults.answers" "" "langsmith.example.com" 2 "" Z1ABCDEF123456 false
+run_wizard "SmithDB defaults complete" "$DEFAULT_INFRA" "$TMP/defaults.answers" "$TMP/defaults.log"
+has_line "LangSmith type is independent of SmithDB" "$DEFAULT_INFRA/terraform.tfvars" '    instance_types = ["m6a.2xlarge"]'
+has_line "Dev / POC lets the LangSmith nodes reach the sizing's maximum" "$DEFAULT_INFRA/terraform.tfvars" '    max_size       = 10'
+has_line "SmithDB type is m6a.4xlarge" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_instance_type            = "m6a.4xlarge"'
+has_line "SmithDB initial capacity" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_node_min_count                = 2'
+has_line "SmithDB ceiling is 5" "$DEFAULT_INFRA/terraform.tfvars" "smithdb_node_max_count                = 5"
+log_lacks "no claim that QuickStart picks the SmithDB node type" "$TMP/defaults.log" "selects the instance type automatically"
+log_lacks "no warning about the SmithDB node type" "$TMP/defaults.log" "gives SmithDB a tier that needs"
+log_has "QuickStart points to the SmithDB scale-up steps" "$TMP/defaults.log" "describes scaling up to the medium or large tier"
+has_line "SmithDB enabled by default" "$DEFAULT_INFRA/terraform.tfvars" 'enable_smithdb                        = true'
+has_line "ingestion enabled by default" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_ingestion_enabled             = true'
+has_line "a new setup serves reads from SmithDB" "$DEFAULT_INFRA/terraform.tfvars" 'smithdb_query_enabled                 = true'
+lacks_key "a new setup writes no sizing_profile" "$DEFAULT_INFRA/terraform.tfvars" sizing_profile
+log_has "QuickStart names the one sizing" "$TMP/defaults.log" "LangSmith runs one sizing"
+# A 0.17 tfvars carries sizing_profile; update mode drops it and says so.
+printf 'sizing_profile = "production"\n' >> "$DEFAULT_INFRA/terraform.tfvars"
+write_update_defaults "$TMP/sizing-update.answers" true
+run_wizard "update mode completes with a 0.17 sizing_profile" "$DEFAULT_INFRA" "$TMP/sizing-update.answers" "$TMP/sizing-update.log"
+lacks_key "update mode drops sizing_profile" "$DEFAULT_INFRA/terraform.tfvars" sizing_profile
+log_has "update mode says sizing_profile was removed" "$TMP/sizing-update.log" "sizing_profile was removed in 0.18"
 
 echo "8. SmithDB can be turned on and off in the wizard"
 OPTOUT_INFRA="$TMP/smithdb-optout"
-write_fresh_answers "$TMP/optout.answers" "" "langsmith.example.com" 2 "" Z1ABCDEF123456 false "" n
+write_fresh_answers "$TMP/optout.answers" "" "langsmith.example.com" 2 "" Z1ABCDEF123456 false n
 run_wizard "a new setup can decline SmithDB" "$OPTOUT_INFRA" "$TMP/optout.answers" "$TMP/optout.log"
 has_line "SmithDB is off when declined" "$OPTOUT_INFRA/terraform.tfvars" 'enable_smithdb                        = false'
 write_update_defaults "$TMP/enable.answers" true y
@@ -325,6 +326,45 @@ write_update_defaults "$TMP/disable.answers" false n y
 run_wizard "update mode can turn SmithDB off after a warning" "$OPTOUT_INFRA" "$TMP/disable.answers" "$TMP/disable.log"
 has_line "SmithDB is off after the update" "$OPTOUT_INFRA/terraform.tfvars" 'enable_smithdb                        = false'
 log_has "turning SmithDB off warns about its data" "$TMP/disable.log" "disabling SmithDB may remove its metastore"
+
+echo "9. Fleet, Chat and Insights storage is no longer asked, and 0.17 settings stop the wizard"
+for key in fleet_storage polly_storage insights_storage enable_standalone_polly enable_standalone_insights; do
+  lacks_key "a new install does not write $key" "$SMITHDB_INFRA/terraform.tfvars" "$key"
+done
+STOP_INFRA="$TMP/addon-stop"
+for case in 'polly_storage = "in-cluster"' 'enable_standalone_insights = true'; do
+  mkdir -p "$STOP_INFRA"
+  # Chat is on, so its in-cluster data would be stranded.
+  { sed 's/^enable_polly[[:space:]]*=.*/enable_polly = true/' "$SMITHDB_INFRA/terraform.tfvars"; printf '%s\n' "$case"; } > "$STOP_INFRA/terraform.tfvars"
+  write_update_defaults "$TMP/addon-stop.answers" true
+  if INFRA_DIR="$STOP_INFRA" bash "$SRC" < "$TMP/addon-stop.answers" > "$TMP/addon-stop.log" 2>&1; then
+    bad "update mode stops on $case (the wizard finished)"
+  else
+    log_has "update mode stops on $case" "$TMP/addon-stop.log" "${case%% *} "
+  fi
+  grep -Fqx "$case" "$STOP_INFRA/terraform.tfvars" \
+    && ok "the stop on $case leaves terraform.tfvars as it was" \
+    || bad "the stop on $case rewrote terraform.tfvars"
+done
+# The 0.17 QuickStart wrote polly_storage = "in-cluster" with Chat off too.
+STALE_INFRA="$TMP/addon-stale"
+mkdir -p "$STALE_INFRA"
+{ cat "$SMITHDB_INFRA/terraform.tfvars"; printf 'polly_storage = "in-cluster"\n'; } > "$STALE_INFRA/terraform.tfvars"
+write_update_defaults "$TMP/addon-stale.answers" true
+run_wizard "update mode accepts in-cluster storage for an add-on that is off" "$STALE_INFRA" "$TMP/addon-stale.answers" "$TMP/addon-stale.log"
+lacks_key "update mode drops the stale polly_storage" "$STALE_INFRA/terraform.tfvars" "polly_storage"
+KEEP_INFRA="$TMP/addon-keep"
+mkdir -p "$KEEP_INFRA"
+{ cat "$SMITHDB_INFRA/terraform.tfvars"; printf 'fleet_storage = "external"\npolly_storage = "external"\n'; } > "$KEEP_INFRA/terraform.tfvars"
+write_update_defaults "$TMP/addon-keep.answers" true
+run_wizard "update mode accepts fleet_storage and polly_storage = external" "$KEEP_INFRA" "$TMP/addon-keep.answers" "$TMP/addon-keep.log"
+for key in fleet_storage polly_storage; do
+  if awk -v key="$key" '$1 == key { found = ($3 == "\"external\"") } END { exit !found }' "$KEEP_INFRA/terraform.tfvars"; then
+    ok "update mode keeps the $key confirmation that deploy.sh reads"
+  else
+    bad "update mode keeps the $key confirmation that deploy.sh reads"
+  fi
+done
 
 echo ""
 echo "passed=$PASS failed=$FAIL"

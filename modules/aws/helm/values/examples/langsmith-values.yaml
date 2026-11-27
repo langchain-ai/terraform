@@ -58,6 +58,9 @@ config:
   blobStorage:
     enabled: true
     engine: "S3"
+  settings:
+    # Medium reads, medium writes (see the sizing note below).
+    redisRunsExpirySeconds: "3600"
 
 postgres:
   external:
@@ -71,14 +74,30 @@ redis:
     existingSecretName: "langsmith-redis"
     connectionUrlSecretKey: "connection_url"
 
-# Queue autoscaling. Terraform installs KEDA on every install (k8s-bootstrap),
-# and KEDA scales these services on their backlog, CPU, and memory. The ranges
-# fit the medium reads and writes pattern and the SmithDB small tier. A sizing
-# file sets its own queue and ingest-queue ranges; the compaction-worker range
-# below is the same in every profile.
-#   https://docs.langchain.com/langsmith/self-host-scale
+# Sizing. Every install runs the scale guide's medium reads, medium writes pattern
+# (about 20 concurrent users and 100 traces per second) and the SmithDB small tier:
+#   https://docs.langchain.com/langsmith/self-host-scale#medium-reads-medium-writes
 #   https://docs.langchain.com/langsmith/self-host-smithdb-scale
-# The chart allows one scaler per service, so the compaction worker's HPA is off.
+# Requests and limits stay at the chart's defaults, and the pattern's 13 GiB of
+# Redis is the default ElastiCache node, cache.m6g.xlarge. In-cluster ClickHouse
+# keeps the chart's 3.5 CPU, 12 GiB and 50 GiB volume, below the pattern's: with
+# SmithDB serving reads it mostly takes writes, and
+# helm/values/examples/SIZING.md says how to grow its volume. Size beyond this
+# pattern here.
+frontend:
+  deployment:
+    replicas: 2
+
+backend:
+  autoscaling:
+    hpa:
+      enabled: true
+      minReplicas: 8
+      maxReplicas: 16
+
+# Terraform installs KEDA on every install (k8s-bootstrap), and KEDA scales the
+# queues on their backlog, CPU, and memory. The chart allows one scaler per
+# service, so the compaction worker's HPA is off.
 queue:
   autoscaling:
     keda:

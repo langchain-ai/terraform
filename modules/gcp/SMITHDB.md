@@ -3,7 +3,7 @@
 This module provides GCP reference infrastructure and Helm values for SmithDB on
 LangSmith chart 0.17. SmithDB is optional and runs alongside ClickHouse, in the
 same namespace and Helm release. To upgrade an install that ran SmithDB on chart
-0.16, read [Upgrade from chart 0.16](#upgrade-from-chart-016) first.
+0.16, read [Version upgrades](#version-upgrades) first.
 
 ## What is provisioned
 
@@ -316,75 +316,28 @@ gcloud storage ls "gs://$(terraform -chdir=infra output -raw smithdb_object_stor
 - `network-disk`: one `<pod>-cache` PVC for each cache pod, on
   `smithdb-cache<suffix>`. `minimal`: the same, on `standard-rwo`.
 
-## Upgrade from chart 0.16
+## Version upgrades
 
-Do steps 1 to 3 before `make apply`. With the upgrade path in
-`MIGRATION-0.16-to-0.17.md`, do them before its step 3. Its steps 3 to 5 then
-run `make apply`, `make init-values`, and `make deploy`.
+For version upgrades, follow the [official LangSmith upgrade guide](https://docs.langchain.com/langsmith/self-host-upgrades) and contact [LangChain Support](https://support.langchain.com) for assistance.
 
-1) Select the size. An unset `smithdb_sizing` now follows `sizing_profile`, so
-`production` gives `medium`, `production-large` gives `large`, and `minimum`
-gives `minimal` with no pools.
-For `medium`, Terraform replaces the cache pool with `n2-standard-32` and 4
-Local SSD. The compute pool stays `n2-standard-8`.
-For `large`, Terraform replaces the cache pool with `n2-standard-64` and 8
-Local SSD, and the compute pool with `n2-standard-16`. `large` runs 12 SmithDB
-pods that request about 350 vCPU. To stay smaller, set `smithdb_sizing` to
-`medium` or `small`. To keep the 0.16 pool (n2-standard-16, 2 Local SSD) and
-the chart tier `small`, set these lines in `infra/terraform.tfvars`:
+For existing chart 0.16 installations, check these GCP module settings before
+applying Terraform or deploying the chart:
 
-```hcl
-smithdb_sizing        = "small"
-smithdb_cache_storage = "local-ssd"
-```
-
-These lines do not keep the metastore tier. See the next paragraph.
-
-An unset `smithdb_metastore_tier` now also follows the size. For `small`,
-`medium`, and `large`, `make apply` changes a created metastore from
-`db-custom-2-8192` to the tier in the [sizing table](#sizing). The change takes
-the instance offline for less than 60 seconds. To keep the old tier, set this
-line in `infra/terraform.tfvars`:
-
-```hcl
-smithdb_metastore_tier = "db-custom-2-8192"
-```
-
-If `terraform.tfvars` already sets `smithdb_metastore_tier`, the tier does not
-change. `minimal` and an external metastore do not change.
-
-2) Check the metastore TLS values. The proxy is now the default for a created
-metastore. Remove `smithdb_metastore_use_ssl = true`. To keep mode 2, set
-`smithdb_metastore_use_auth_proxy = false`.
-
-3) Replace the overlay. `make init-values` copies
-`langsmith-values-smithdb.yaml` only when it is missing, and the 0.16 copy has
-`local-ssd-storage` and `smithdb.migration.deployment`. Save your edits and
-delete the file. The next `make init-values` creates it again. Then put back
-only the edits that do not set `nodeSelector`, `tolerations`, `volumes`,
-`volumeMounts`, or `resources`.
-
-4) Run `make apply`, `make init-values`, and `make deploy`. For a release
-candidate, use `CHART_VERSION=0.17.0-rc.N make deploy`. Then do the checks in
-[Verification](#verification).
-
-### Direct Helm upgrades
-
-A direct `helm upgrade`, for example with values from `helm get values`, does
-not load the sizing file. Remove the 0.16 keys: the `local-ssd-storage`
-volumes, the `/data` `volumeMounts` (chart 0.17 mounts `cache` at `/data`), and
-`smithdb.migration.deployment`. Then pass the Terraform output last, so that it
-sets the full [cache block](#local-ssd) on `query`, `ingestion`, and
-`compactionWorker`:
-
-```sh
-terraform -chdir=infra output -raw smithdb_helm_values > smithdb-sizing.yaml
-helm upgrade langsmith langchain/langsmith -n langsmith --version <0.17 version> \
-  -f current-values.yaml -f smithdb-sizing.yaml
-```
-
-A rename of the volume on `query` only is not enough: `ingestion` and
-`compactionWorker` then get PVCs on the default class, with no error.
+- **Node pools.** An unset `smithdb_sizing` follows `sizing_profile`. The
+  resulting size can replace the cache node pool. To retain the 0.16 cache
+  pool configuration and the small chart tier, explicitly set
+  `smithdb_sizing = "small"` and `smithdb_cache_storage = "local-ssd"`.
+- **Metastore.** An unset `smithdb_metastore_tier` follows the selected
+  SmithDB size for a module-created metastore. A tier change briefly takes
+  the metastore offline. To retain the old tier, set
+  `smithdb_metastore_tier = "db-custom-2-8192"` explicitly. Review the
+  [metastore TLS settings](#metastore-tls-on-gcp) if you previously configured
+  TLS explicitly. The Cloud SQL Auth Proxy is now the default for a
+  module-created metastore.
+- **Helm values.** Chart 0.16 overlays can contain stale cache volume and
+  mount settings and the obsolete `smithdb.migration.deployment` key.
+  Review existing overrides against the generated values, including the
+  cache configuration for query, ingestion, and compaction.
 
 ## Troubleshooting
 

@@ -74,15 +74,13 @@ run "keda_is_planned_with_every_feature_flag_off" {
   command = plan
 
   variables {
-    enable_deployments         = false
-    enable_engine              = false
-    enable_fleet               = false
-    enable_insights            = false
-    enable_polly               = false
-    enable_standalone_insights = false
-    enable_standalone_polly    = false
-    enable_sandboxes           = false
-    enable_smithdb             = false
+    enable_deployments = false
+    enable_engine      = false
+    enable_fleet       = false
+    enable_insights    = false
+    enable_polly       = false
+    enable_sandboxes   = false
+    enable_smithdb     = false
   }
 
   assert {
@@ -456,26 +454,6 @@ run "smithdb_node_group_defaults_fit_the_small_tier" {
   }
 }
 
-# Every sizing profile runs the SmithDB small tier, so the largest profile keeps the
-# default SmithDB nodes.
-run "smithdb_node_group_does_not_follow_the_sizing_profile" {
-  command = plan
-
-  variables {
-    enable_smithdb = true
-    sizing_profile = "production-large"
-  }
-
-  assert {
-    condition = (
-      module.eks.eks_managed_node_group_inputs["smithdb"].instance_types[0] == "m6a.4xlarge" &&
-      module.eks.eks_managed_node_group_inputs["smithdb"].min_size == 2 &&
-      module.eks.eks_managed_node_group_inputs["smithdb"].max_size == 5
-    )
-    error_message = "sizing_profile must not change the SmithDB node type or counts"
-  }
-}
-
 run "smithdb_node_type_and_counts_are_plain_inputs" {
   command = plan
 
@@ -806,48 +784,51 @@ run "external_redis_is_planned" {
   }
 }
 
-# ── Add-on storage switches ──────────────────────────────────────────────────
-# fleet_storage decides who owns the Fleet database and Redis index: Terraform
-# on the shared RDS and ElastiCache, or the chart's own in-cluster StatefulSets.
-# Chart v0.16 added the in-cluster path, so both directions need a run.
+# ── Add-on storage ───────────────────────────────────────────────────────────
+# Fleet, Chat and Insights each get a database on the shared RDS and a DB index
+# on the shared ElastiCache, through these Secrets. Engine alone is covered in
+# engine.tftest.hcl.
 
-run "external_fleet_storage_plans_the_shared_credentials" {
+run "each_addon_plans_its_shared_credentials" {
   command = plan
 
   variables {
     enable_fleet    = true
-    fleet_storage   = "external"
-    postgres_source = "external"
-    redis_source    = "external"
+    enable_polly    = true
+    enable_insights = true
   }
 
   assert {
-    condition     = length(kubernetes_secret.fleet_postgres) == 1
-    error_message = "fleet_storage = external did not plan the Fleet Postgres secret"
+    condition     = length(kubernetes_secret.fleet_postgres) == 1 && length(kubernetes_secret.fleet_redis) == 1
+    error_message = "enable_fleet did not plan the Fleet Postgres and Redis Secrets"
   }
   assert {
-    condition     = length(kubernetes_secret.fleet_redis) == 1
-    error_message = "fleet_storage = external did not plan the Fleet Redis secret"
+    condition     = length(kubernetes_secret.standalone_polly_postgres) == 1 && length(kubernetes_secret.standalone_polly_redis) == 1
+    error_message = "enable_polly did not plan the Chat Postgres and Redis Secrets"
+  }
+  assert {
+    condition     = length(kubernetes_secret.standalone_insights_postgres) == 1 && length(kubernetes_secret.standalone_insights_redis) == 1
+    error_message = "enable_insights did not plan the Insights Postgres and Redis Secrets"
+  }
+  assert {
+    condition     = toset(keys(terraform_data.standalone_db)) == toset(["fleet", "polly", "insights"])
+    error_message = "the three add-ons did not each plan their database on the shared RDS"
   }
 }
 
-run "in_cluster_fleet_storage_plans_no_shared_credentials" {
+run "addons_off_plan_no_shared_credentials" {
   command = plan
 
   variables {
-    enable_fleet    = true
-    fleet_storage   = "in-cluster"
-    postgres_source = "external"
-    redis_source    = "external"
+    enable_fleet    = false
+    enable_polly    = false
+    enable_insights = false
+    enable_engine   = false
   }
 
   assert {
-    condition     = length(kubernetes_secret.fleet_postgres) == 0
-    error_message = "fleet_storage = in-cluster still planned the Fleet Postgres secret"
-  }
-  assert {
-    condition     = length(kubernetes_secret.fleet_redis) == 0
-    error_message = "fleet_storage = in-cluster still planned the Fleet Redis secret"
+    condition     = length(terraform_data.standalone_db) == 0 && length(kubernetes_secret.standalone_polly_redis) == 0 && length(kubernetes_secret.standalone_insights_redis) == 0 && length(kubernetes_secret.fleet_redis) == 0
+    error_message = "an add-on that is off still planned a database or Secret"
   }
 }
 

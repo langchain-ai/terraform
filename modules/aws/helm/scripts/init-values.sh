@@ -19,13 +19,10 @@
 # Creates:
 #   - values/langsmith-values.yaml              (base — copied from examples/)
 #   - values/langsmith-values-overrides.yaml    (auto-generated: hostname, IRSA, S3)
-#   - values/langsmith-values-sizing-*.yaml     (based on sizing choice)
 #   - values/langsmith-values-agent-deploys.yaml (if Deployments is enabled)
 #   - values/langsmith-values-insights.yaml     (if Insights is enabled)
 #   - values/langsmith-values-polly.yaml        (if LangSmith Chat is enabled)
 #   - values/langsmith-values-fleet.yaml        (if Fleet is enabled)
-#   - values/langsmith-values-standalone-polly.yaml (if Chat uses external storage)
-#   - values/langsmith-values-standalone-insights.yaml (if Insights uses external storage)
 #   - values/langsmith-values-engine.yaml        (if Engine is enabled)
 #   - values/langsmith-values-smithdb.yaml       (if SmithDB is enabled)
 #   - values/langsmith-values-smithdb-overrides.yaml (if SmithDB is enabled)
@@ -58,7 +55,6 @@ _tls_source=$(_parse_tfvar "tls_certificate_source") || _tls_source="none"
 _acm_arn=$(_parse_tfvar "acm_certificate_arn") || _acm_arn=""
 _alb_scheme=$(_parse_tfvar "alb_scheme") || _alb_scheme="internet-facing"
 _clickhouse_source=$(_parse_tfvar "clickhouse_source") || _clickhouse_source="in-cluster"
-_sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
 _langsmith_domain=$(_parse_tfvar "langsmith_domain") || _langsmith_domain=""
 _sandbox_runtime_source=$(_parse_tfvar "sandbox_runtime_source") || _sandbox_runtime_source="in-cluster"
 # Gateway mode comes from the Terraform outputs, not the tfvars text: enable_envoy_gateway
@@ -129,7 +125,6 @@ echo "  name_prefix            = ${_name_prefix:-(empty)}"
 echo "  environment            = $_environment"
 echo "  region                 = $_region"
 echo "  tls_certificate_source = $_tls_source (protocol: $_protocol)"
-echo "  sizing_profile         = $_sizing_profile"
 echo "  sandbox_runtime_source = $_sandbox_runtime_source"
 echo ""
 
@@ -235,21 +230,6 @@ else
 fi
 echo ""
 
-# ── Sizing profile (from terraform.tfvars) ──────────────────────────────────
-if [[ "$_sizing_profile" != "default" ]]; then
-  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  _sizing_example="$EXAMPLES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  if [[ ! -f "$_sizing_file" ]]; then
-    cp "$_sizing_example" "$_sizing_file"
-    echo "Sizing: ${_sizing_profile} (created langsmith-values-sizing-${_sizing_profile}.yaml)"
-  else
-    echo "Sizing: ${_sizing_profile} (existing langsmith-values-sizing-${_sizing_profile}.yaml)"
-  fi
-else
-  echo "Sizing: chart defaults (sizing_profile = default)"
-fi
-echo ""
-
 # ── Product addons (driven by enable_* flags in terraform.tfvars) ────────────
 _deploys_file="$VALUES_DIR/langsmith-values-agent-deploys.yaml"
 _insights_file="$VALUES_DIR/langsmith-values-insights.yaml"
@@ -260,8 +240,6 @@ _enable_insights=false
 _enable_polly=false
 _enable_usage_telemetry=false
 _enable_fleet=false
-_enable_standalone_polly=false
-_enable_standalone_insights=false
 _enable_sandboxes=false
 _enable_engine=false
 _enable_sso_oidc=false
@@ -270,8 +248,6 @@ _tfvar_is_true "enable_insights"       && _enable_insights=true
 _tfvar_is_true "enable_polly"          && _enable_polly=true
 _tfvar_is_true "enable_usage_telemetry" && _enable_usage_telemetry=true
 _tfvar_is_true "enable_fleet"               && _enable_fleet=true
-_tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
-_tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"           && _enable_sandboxes=true
 _tfvar_is_true "enable_engine"              && _enable_engine=true
 _tfvar_is_true "enable_sso_oidc"            && _enable_sso_oidc=true
@@ -333,40 +309,6 @@ if [[ "$_enable_sso_oidc" == "true" ]]; then
     echo "  Existing: langsmith-values-sso.yaml"
   fi
   echo "  ✔ SSO login"
-fi
-
-_fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
-if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
-  echo "ERROR: fleet_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
-
-_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="in-cluster"
-if [[ "$_polly_storage" != "external" && "$_polly_storage" != "in-cluster" ]]; then
-  echo "ERROR: polly_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
-
-# Keep the older standalone switch as an external-storage enabling alias.
-if [[ "$_enable_standalone_polly" == "true" ]]; then
-  _enable_polly=true
-  _polly_storage="external"
-elif [[ "$_enable_polly" == "true" && "$_polly_storage" == "external" ]]; then
-  _enable_standalone_polly=true
-fi
-
-_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="in-cluster"
-if [[ "$_insights_storage" != "external" && "$_insights_storage" != "in-cluster" ]]; then
-  echo "ERROR: insights_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
-
-# Keep the older standalone switch as an external-storage enabling alias.
-if [[ "$_enable_standalone_insights" == "true" ]]; then
-  _enable_insights=true
-  _insights_storage="external"
-elif [[ "$_enable_insights" == "true" && "$_insights_storage" == "external" ]]; then
-  _enable_standalone_insights=true
 fi
 
 _sandbox_service_url_base_url=$(_parse_tfvar "sandbox_service_url_base_url") || _sandbox_service_url_base_url=""
@@ -530,13 +472,12 @@ if [[ "$_enable_polly" == "true" ]]; then
   fi
 fi
 
-# ── Fleet and external-storage overlays ─────────────────────────────────────
-# Top-level fleet:/polly:/insights: deployments wired to per-feature databases on
-# the shared RDS/ElastiCache (K8s Secrets created by Terraform). encryptionKey and
+# ── Fleet ────────────────────────────────────────────────────────────────────
+# Fleet, Chat and Insights each use their own database on the shared RDS and
+# their own DB index on the shared ElastiCache (K8s Secrets created by
+# Terraform); deploy.sh sets that storage on every deploy. encryptionKey and
 # IRSA service-account annotations are injected into the overrides file below.
 _fleet_file="$VALUES_DIR/langsmith-values-fleet.yaml"
-_standalone_polly_file="$VALUES_DIR/langsmith-values-standalone-polly.yaml"
-_standalone_insights_file="$VALUES_DIR/langsmith-values-standalone-insights.yaml"
 
 if [[ "$_enable_fleet" == "true" ]]; then
   if [[ ! -f "$_fleet_file" ]]; then
@@ -550,37 +491,16 @@ else
   echo "  ✗ Fleet (enable_fleet = false)"
 fi
 
-if [[ "$_enable_standalone_polly" == "true" ]]; then
-  if [[ ! -f "$_standalone_polly_file" ]]; then
-    cp "$EXAMPLES_DIR/langsmith-values-standalone-polly.yaml" "$_standalone_polly_file"
-    echo "  Created: langsmith-values-standalone-polly.yaml"
-  else
-    echo "  Existing: langsmith-values-standalone-polly.yaml"
-  fi
-fi
-
-if [[ "$_enable_standalone_insights" == "true" ]]; then
-  if [[ ! -f "$_standalone_insights_file" ]]; then
-    cp "$EXAMPLES_DIR/langsmith-values-standalone-insights.yaml" "$_standalone_insights_file"
-    echo "  Created: langsmith-values-standalone-insights.yaml"
-  else
-    echo "  Existing: langsmith-values-standalone-insights.yaml"
-  fi
-fi
-
 if [[ "$_enable_polly" == "true" ]]; then
-  _polly_storage="in-cluster Postgres/Redis"
-  [[ "$_enable_standalone_polly" == "true" ]] && _polly_storage="external Postgres/Redis"
-  echo "  ✔ LangSmith Chat (formerly Polly) ($_polly_storage)"
+  echo "  ✔ LangSmith Chat (formerly Polly)"
 else
-  echo "  ✗ LangSmith Chat (formerly Polly) (enable_polly and enable_standalone_polly are false)"
+  echo "  ✗ LangSmith Chat (formerly Polly) (enable_polly = false)"
 fi
 
-if [[ "$_enable_insights" == "true" || "$_enable_standalone_insights" == "true" ]]; then
-  _insights_storage_label="${_insights_storage} Postgres/Redis"
-  echo "  ✔ Insights ($_insights_storage_label)"
+if [[ "$_enable_insights" == "true" ]]; then
+  echo "  ✔ Insights"
 else
-  echo "  ✗ Insights (enable_insights and enable_standalone_insights are false)"
+  echo "  ✗ Insights (enable_insights = false)"
 fi
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
@@ -599,9 +519,7 @@ if [[ "$_enable_engine" == "true" ]]; then
   else
     echo "  Existing: langsmith-values-engine.yaml"
   fi
-  _engine_storage_label="in-cluster Postgres/Redis"
-  [[ "$_enable_insights" == "true" ]] && _engine_storage_label="Insights ${_insights_storage} Postgres/Redis"
-  echo "  ✔ Engine (Bedrock through IRSA; $_engine_storage_label)"
+  echo "  ✔ Engine (Bedrock through IRSA; the Insights database and Redis index)"
 else
   echo "  ✗ Engine (enable_engine = false)"
 fi
@@ -736,9 +654,9 @@ if [[ "$_enable_fleet" == "true" ]]; then
     echo "       Run: source infra/scripts/setup-env.sh" >&2
     exit 1
   fi
-  _fleet_storage_block=""
-  if [[ "$_fleet_storage" == "external" ]]; then
-    _fleet_storage_block="
+  _standalone_block+="
+fleet:
+  encryptionKey: \"${_fleet_key}\"
   postgres:
     external:
       enabled: true
@@ -746,19 +664,7 @@ if [[ "$_enable_fleet" == "true" ]]; then
   redis:
     external:
       enabled: true
-      existingSecretName: \"langsmith-fleet-redis\""
-  else
-    _fleet_storage_block="
-  postgres:
-    external:
-      enabled: false
-  redis:
-    external:
-      enabled: false"
-  fi
-  _standalone_block+="
-fleet:
-  encryptionKey: \"${_fleet_key}\"${_fleet_storage_block}
+      existingSecretName: \"langsmith-fleet-redis\"
   apiServer:
     serviceAccount:
       annotations:
@@ -788,6 +694,14 @@ if [[ "$_enable_polly" == "true" ]]; then
   _standalone_block+="
 polly:
   encryptionKey: \"${_polly_key}\"
+  postgres:
+    external:
+      enabled: true
+      existingSecretName: \"langsmith-polly-postgres\"
+  redis:
+    external:
+      enabled: true
+      existingSecretName: \"langsmith-polly-redis\"
   apiServer:
     serviceAccount:
       annotations:
@@ -855,17 +769,51 @@ engine:${_engine_settings}
   fi
 fi
 
+# The chart sets no requests or limits on the shared Engine and Insights
+# deployment, and a strict ResourceQuota rejects a pod without them. They go in
+# this file because init-values.sh rewrites it on every run, while it writes
+# langsmith-values-insights.yaml only once. The Engine and Insights files load
+# after this file, so a value set in either of them wins. test-values.sh
+# renders this block.
 if [[ "$_enable_insights" == "true" || "$_enable_engine" == "true" ]]; then
-  _standalone_block+="
+  _engine_insights_agent_block=$(cat << ENGINE_INSIGHTS_AGENT_YAML
 engineInsightsAgent:
+  postgres:
+    external:
+      enabled: true
+      existingSecretName: "langsmith-insights-postgres"
+  redis:
+    external:
+      enabled: true
+      existingSecretName: "langsmith-insights-redis"
   apiServer:
+    deployment:
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+        limits:
+          cpu: "4"
+          memory: 8Gi
     serviceAccount:
       annotations:
-        eks.amazonaws.com/role-arn: \"${_engine_agent_role_arn}\"
+        eks.amazonaws.com/role-arn: "${_engine_agent_role_arn}"
   queue:
+    deployment:
+      resources:
+        requests:
+          cpu: "1"
+          memory: 2Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
     serviceAccount:
       annotations:
-        eks.amazonaws.com/role-arn: \"${_engine_agent_role_arn}\""
+        eks.amazonaws.com/role-arn: "${_engine_agent_role_arn}"
+ENGINE_INSIGHTS_AGENT_YAML
+)
+  _standalone_block+="
+${_engine_insights_agent_block}"
 fi
 
 _sandbox_config_block=""
@@ -999,6 +947,10 @@ commonEnv:
     value: "${_region}"
   - name: AWS_DEFAULT_REGION
     value: "${_region}"
+  # The medium reads, medium writes pattern in the scale guide; commonEnv lives here
+  # because a list in a later file replaces the base values' list.
+  - name: CLICKHOUSE_ASYNC_INSERT_WAIT_PCT_FLOAT
+    value: "0"
 $( [[ "$_enable_usage_telemetry" == "true" ]] && cat <<'TELEMETRY'
   - name: PHONE_HOME_USAGE_REPORTING_ENABLED
     value: "true"

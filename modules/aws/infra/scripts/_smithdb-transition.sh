@@ -135,13 +135,12 @@ _smithdb_tier_fits() {
   return 1
 }
 
-# make init-values keeps an existing sizing file, so one copied earlier can still set
-# smithdb.resourceTier. langsmith-values-smithdb.yaml loads after it, so a different
-# tier there would replace the sizing file's tier without notice. Returns 1, with the
-# fix, when the sizing file sets a tier other than the deployed one.
-_smithdb_sizing_tier_check() {
+# langsmith-values.yaml loads before langsmith-values-smithdb.yaml, so a tier set in
+# it, such as one moved there from a 0.17 sizing file, would be replaced without
+# notice. Returns 1, with the fix, when the file sets a tier other than the deployed one.
+_smithdb_base_tier_check() {
   local file="$1" deployed="$2" tier
-  [[ -n "$file" && -f "$file" ]] || return 0
+  [[ -f "$file" ]] || return 0
   tier=$(awk '
     /^[^ #]/ { s = ($1 == "smithdb:") }
     s && /^  resourceTier:/ { v = $2; gsub(/["\047]/, "", v); print v; exit }

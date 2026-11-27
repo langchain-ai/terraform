@@ -14,11 +14,8 @@
 #   5. langsmith-values-insights.yaml       — Insights (if enable_insights)
 #   6. langsmith-values-polly.yaml          — LangSmith Chat (formerly Polly)
 #   7. langsmith-values-fleet.yaml          — Fleet (if enable_fleet)
-#   8. langsmith-values-standalone-polly.yaml    — Chat external-storage overlay
-#   9. langsmith-values-standalone-insights.yaml — Insights external-storage overlay
-#  10. langsmith-values-sizing-{profile}.yaml — sizing (if configured)
-#  11. langsmith-values-smithdb.yaml         — SmithDB base (if enabled)
-#  12. langsmith-values-smithdb-overrides.yaml — SmithDB environment overrides
+#   8. langsmith-values-smithdb.yaml         — SmithDB base (if enabled)
+#   9. langsmith-values-smithdb-overrides.yaml — SmithDB environment overrides
 #
 # Generate all values files: make init-values (or ./scripts/init-values.sh)
 # Templates live in values/examples/ — init-values.sh copies them based on your choices.
@@ -30,6 +27,21 @@ HELM_DIR="$SCRIPT_DIR/.."
 INFRA_DIR="$HELM_DIR/../infra"
 VALUES_DIR="$HELM_DIR/values"
 source "$INFRA_DIR/scripts/_common.sh"
+# shellcheck source=_addon-storage.sh
+source "$SCRIPT_DIR/_addon-storage.sh"
+# shellcheck source=_sizing.sh
+source "$SCRIPT_DIR/_sizing.sh"
+
+# 0.18 dropped sizing_profile and its files. Stop before anything touches the cluster.
+_old_sizing=$(_old_sizing_files "$VALUES_DIR")
+if [[ -n "$_old_sizing" ]]; then
+  echo "ERROR: deploy.sh no longer loads this 0.17 sizing file in helm/values: ${_old_sizing//$'\n'/, }." >&2
+  echo "       None of its values apply unless you copy them. Follow \"Moving from a 0.17 sizing profile\"" >&2
+  echo "       in helm/values/examples/SIZING.md: copy the new sizing into langsmith-values.yaml, copy across" >&2
+  echo "       the ranges and limits you rely on, check the node group, then delete the file and the" >&2
+  echo "       sizing_profile line in terraform.tfvars." >&2
+  exit 1
+fi
 
 RELEASE_NAME="${RELEASE_NAME:-langsmith}"
 NAMESPACE="${NAMESPACE:-langsmith}"
@@ -192,13 +204,9 @@ _tfvar_is_true "enable_sandboxes" && _enable_sandboxes=true
 _enable_engine=false
 _tfvar_is_true "enable_engine" && _enable_engine=true
 _direct_polly_enabled=false
-if _tfvar_is_true "enable_polly" || _tfvar_is_true "enable_standalone_polly"; then
-  _direct_polly_enabled=true
-fi
+_tfvar_is_true "enable_polly" && _direct_polly_enabled=true
 _direct_insights_enabled=false
-if _tfvar_is_true "enable_insights" || _tfvar_is_true "enable_standalone_insights"; then
-  _direct_insights_enabled=true
-fi
+_tfvar_is_true "enable_insights" && _direct_insights_enabled=true
 
 if [[ "$_enable_sandboxes" == "true" ]]; then
   if ! _chart_version_supports_sandboxes "$CHART_VERSION"; then
@@ -243,6 +251,18 @@ if [[ "$_enable_engine" == "true" ]]; then
     exit 1
   fi
 fi
+
+# Terraform rejects the standalone switches that 0.18 removed, but only at plan,
+# and this script reads terraform.tfvars without one. Chat or Insights that only
+# a switch turned on would deploy as off.
+for _switch in enable_standalone_polly enable_standalone_insights; do
+  if _tfvar_is_true "$_switch"; then
+    _switch_feature="${_switch#enable_standalone_}"
+    echo "ERROR: $_switch was removed in 0.18. Replace it with enable_${_switch_feature} = true and" >&2
+    echo "       ${_switch_feature}_storage = \"external\" in terraform.tfvars, then run 'make apply', 'make init-values' and 'make deploy'." >&2
+    exit 1
+  fi
+done
 
 if [[ -z "$_environment" || -z "$_region" ]]; then
   echo "ERROR: Could not resolve environment and/or region from $INFRA_DIR/terraform.tfvars." >&2
@@ -443,51 +463,13 @@ _enable_deployments=false
 _enable_insights=false
 _enable_polly=false
 _enable_fleet=false
-_enable_standalone_polly=false
-_enable_standalone_insights=false
 _enable_sandboxes=false
 _tfvar_is_true "enable_deployments"   && _enable_deployments=true
 _tfvar_is_true "enable_insights"      && _enable_insights=true
 _tfvar_is_true "enable_polly"         && _enable_polly=true
 _tfvar_is_true "enable_fleet"               && _enable_fleet=true
-_tfvar_is_true "enable_standalone_polly"    && _enable_standalone_polly=true
-_tfvar_is_true "enable_standalone_insights" && _enable_standalone_insights=true
 _tfvar_is_true "enable_sandboxes"     && _enable_sandboxes=true
 _enable_smithdb=$(_read_applied_flag "enable_smithdb" true)
-
-_fleet_storage=$(_parse_tfvar "fleet_storage") || _fleet_storage="external"
-if [[ "$_fleet_storage" != "external" && "$_fleet_storage" != "in-cluster" ]]; then
-  echo "ERROR: fleet_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
-
-_polly_storage=$(_parse_tfvar "polly_storage") || _polly_storage="in-cluster"
-if [[ "$_polly_storage" != "external" && "$_polly_storage" != "in-cluster" ]]; then
-  echo "ERROR: polly_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
-
-# Keep the older standalone switch as an external-storage enabling alias.
-if [[ "$_enable_standalone_polly" == "true" ]]; then
-  _enable_polly=true
-  _polly_storage="external"
-elif [[ "$_enable_polly" == "true" && "$_polly_storage" == "external" ]]; then
-  _enable_standalone_polly=true
-fi
-
-_insights_storage=$(_parse_tfvar "insights_storage") || _insights_storage="in-cluster"
-if [[ "$_insights_storage" != "external" && "$_insights_storage" != "in-cluster" ]]; then
-  echo "ERROR: insights_storage must be external or in-cluster in terraform.tfvars." >&2
-  exit 1
-fi
-
-# Keep the older standalone switch as an external-storage enabling alias.
-if [[ "$_enable_standalone_insights" == "true" ]]; then
-  _enable_insights=true
-  _insights_storage="external"
-elif [[ "$_enable_insights" == "true" && "$_insights_storage" == "external" ]]; then
-  _enable_standalone_insights=true
-fi
 
 # Gateway flags come from the Terraform outputs, not the tfvars text: enable_envoy_gateway
 # is derived (unset = on unless Istio/NGINX was chosen), and getting this wrong sends the
@@ -529,28 +511,30 @@ _resolve_entry_hostname() {
 # ── Build values args ─────────────────────────────────────────────────────────
 VALUES_ARGS=(-f "$VALUES_DIR/langsmith-values.yaml" -f "$ENV_FILE")
 
-# Sizing profile: read from terraform.tfvars (production, dev, minimum, or default).
-_sizing_profile=$(_parse_tfvar "sizing_profile") || _sizing_profile="default"
-
 # Print values chain so the user knows exactly what's going into the release.
 echo ""
 echo "Values chain:"
 echo "  ✔ langsmith-values.yaml (base)"
+_sizing_gaps=$(_base_sizing_gaps "$VALUES_DIR/langsmith-values.yaml")
+if [[ -n "$_sizing_gaps" ]]; then
+  echo "    ⚠ WARNING: it does not set ${_sizing_gaps//$'\n'/, }."
+  echo "      Those run the chart's defaults, not the one sizing. A copy made on 0.17 lacks them:"
+  echo "      copy them from helm/values/examples/langsmith-values.yaml (SIZING.md, \"Moving from a"
+  echo "      0.17 sizing profile\")."
+fi
 echo "  ✔ langsmith-values-overrides.yaml (auto-generated)"
 
 # Addon files: gated by enable_* flags in terraform.tfvars.
 # The file must exist AND the corresponding flag must be true.
 # addon:flag_name pairs — flag_name matches the terraform.tfvars variable
 # Engine loads before the Insights files: Engine and Insights share the
-# engineInsightsAgent deployment, so the Insights sizing and storage settings win.
+# engineInsightsAgent deployment, so a setting in the Insights file wins.
 _addon_gate=(
   "agent-deploys:deployments:$_enable_deployments"
   "engine:engine:$_enable_engine"
   "insights:insights:$_enable_insights"
   "polly:polly:$_enable_polly"
   "fleet:fleet:$_enable_fleet"
-  "standalone-polly:standalone_polly:$_enable_standalone_polly"
-  "standalone-insights:standalone_insights:$_enable_standalone_insights"
 )
 for entry in "${_addon_gate[@]}"; do
   addon="${entry%%:*}"
@@ -573,6 +557,12 @@ for entry in "${_addon_gate[@]}"; do
     fi
   fi
 done
+# 0.18 merged these two overlays into the Chat and Insights files and stopped
+# loading them, so a change made only in one of them no longer applies.
+for _old_overlay in standalone-polly standalone-insights; do
+  [[ -f "$VALUES_DIR/langsmith-values-${_old_overlay}.yaml" ]] || continue
+  echo "  ○ langsmith-values-${_old_overlay}.yaml (not loaded from 0.18 — move any change you made in it to langsmith-values-${_old_overlay#standalone-}.yaml)"
+done
 
 # SSO is one-way (LangSmith does not support going back to basic auth), so the deploy stops rather than redeploy a live SSO install with basic auth.
 _sso_file="$VALUES_DIR/langsmith-values-sso.yaml"
@@ -593,98 +583,52 @@ else
   fi
 fi
 
-# The chart defaults Chat to enabled. Force the product and storage contract so
-# skipping a stale values file cannot enable Chat or select the wrong database.
+# The chart defaults Chat and Insights to enabled. Force their product flags so a
+# stale values file cannot turn either on.
 if [[ "$_enable_polly" == "true" ]]; then
   VALUES_ARGS+=(--set "polly.enabled=true")
-  if [[ "$_polly_storage" == "external" ]]; then
-    VALUES_ARGS+=(
-      --set "polly.postgres.external.enabled=true"
-      --set "polly.postgres.external.existingSecretName=langsmith-polly-postgres"
-      --set "polly.redis.external.enabled=true"
-      --set "polly.redis.external.existingSecretName=langsmith-polly-redis"
-    )
-  else
-    VALUES_ARGS+=(
-      --set "polly.postgres.external.enabled=false"
-      --set "polly.postgres.external.existingSecretName="
-      --set "polly.redis.external.enabled=false"
-      --set "polly.redis.external.existingSecretName="
-    )
-  fi
-  echo "  ✔ LangSmith Chat contract (${_polly_storage} Postgres/Redis)"
+  echo "  ✔ LangSmith Chat contract"
 else
   VALUES_ARGS+=(--set "polly.enabled=false")
   echo "  ○ LangSmith Chat disabled"
 fi
 
-# Insights defaults to enabled in the chart. Force both its product flag and
-# shared Engine/Insights storage so stale values cannot redirect its data.
 if [[ "$_enable_insights" == "true" ]]; then
   VALUES_ARGS+=(--set "insights.enabled=true")
-  if [[ "$_insights_storage" == "external" ]]; then
-    VALUES_ARGS+=(
-      --set "engineInsightsAgent.postgres.external.enabled=true"
-      --set "engineInsightsAgent.postgres.external.existingSecretName=langsmith-insights-postgres"
-      --set "engineInsightsAgent.redis.external.enabled=true"
-      --set "engineInsightsAgent.redis.external.existingSecretName=langsmith-insights-redis"
-    )
-  else
-    VALUES_ARGS+=(
-      --set "engineInsightsAgent.postgres.external.enabled=false"
-      --set "engineInsightsAgent.postgres.external.existingSecretName="
-      --set "engineInsightsAgent.redis.external.enabled=false"
-      --set "engineInsightsAgent.redis.external.existingSecretName="
-    )
-  fi
-  echo "  ✔ Insights contract (${_insights_storage} Postgres/Redis)"
+  echo "  ✔ Insights contract"
 else
   VALUES_ARGS+=(--set "insights.enabled=false")
   echo "  ○ Insights disabled"
 fi
 
-# Fleet always needs host-backend. Its storage mode must also override preserved
-# values files because init-values.sh intentionally does not replace them.
+# Fleet always needs host-backend.
 if [[ "$_enable_fleet" == "true" ]]; then
   VALUES_ARGS+=(--set "hostBackend.enabled=true")
-  if [[ "$_fleet_storage" == "external" ]]; then
-    VALUES_ARGS+=(
-      --set "fleet.postgres.external.enabled=true"
-      --set "fleet.postgres.external.existingSecretName=langsmith-fleet-postgres"
-      --set "fleet.redis.external.enabled=true"
-      --set "fleet.redis.external.existingSecretName=langsmith-fleet-redis"
-    )
-  else
-    VALUES_ARGS+=(
-      --set "fleet.postgres.external.enabled=false"
-      --set "fleet.redis.external.enabled=false"
-    )
-  fi
-  echo "  ✔ Fleet contract (host-backend; ${_fleet_storage} Postgres/Redis)"
+  echo "  ✔ Fleet contract (host-backend)"
 fi
 
-# Sizing: loaded last so it wins over addon defaults (e.g. polly maxScale).
-if [[ "$_sizing_profile" != "default" ]]; then
-  _sizing_file="$VALUES_DIR/langsmith-values-sizing-${_sizing_profile}.yaml"
-  if [[ -f "$_sizing_file" ]]; then
-    VALUES_ARGS+=(-f "$_sizing_file")
-    echo "  ✔ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile})"
-    if [[ "$_sizing_profile" == "minimum" ]]; then
-      echo ""
-      echo "  ⚠️  WARNING: sizing_profile = ${_sizing_profile} — NOT for production use."
-      echo "     Resources are reduced for dev/test/POC only. Expect degraded"
-      echo "     performance under real workloads. Use sizing_profile = production for production."
-      echo ""
-    fi
-  else
-    echo "  ✗ langsmith-values-sizing-${_sizing_profile}.yaml (sizing_profile = ${_sizing_profile} but file not found — run: make init-values)"
-  fi
-else
-  echo "  ○ sizing: chart defaults (sizing_profile = default)"
+# Storage is set here too, not only in the values files, because init-values.sh
+# does not replace a values file that already exists.
+_engine_insights_agent=false
+[[ "$_enable_insights" == "true" || "$_enable_engine" == "true" ]] && _engine_insights_agent=true
+_unconfirmed_storage=()
+if [[ "$_enable_fleet" == "true" && "$(_parse_tfvar fleet_storage || true)" != "external" ]]; then
+  _unconfirmed_storage+=(fleet)
+fi
+if [[ "$_enable_polly" == "true" && "$(_parse_tfvar polly_storage || true)" != "external" ]]; then
+  _unconfirmed_storage+=(polly)
+fi
+if [[ "$_engine_insights_agent" == "true" && "$(_parse_tfvar insights_storage || true)" != "external" ]]; then
+  _unconfirmed_storage+=(engineInsightsAgent)
+fi
+_addon_storage_cutover_check "$RELEASE_NAME" "$NAMESPACE" ${_unconfirmed_storage[@]+"${_unconfirmed_storage[@]}"} || exit 1
+_addon_storage_values "$_enable_fleet" "$_enable_polly" "$_engine_insights_agent"
+if [[ "$_enable_fleet" == "true" || "$_enable_polly" == "true" || "$_engine_insights_agent" == "true" ]]; then
+  echo "  ✔ Fleet, Chat, Insights and Engine storage (shared RDS and ElastiCache)"
 fi
 
 # SmithDB overlay + env overrides — layered last so object-store, identity, and
-# staged LangSmith integration gates win over base/sizing defaults.
+# staged LangSmith integration gates win over the base values.
 if [[ "$_enable_smithdb" == "true" ]]; then
   _smithdb_base="$VALUES_DIR/langsmith-values-smithdb.yaml"
   _smithdb_overrides="$VALUES_DIR/langsmith-values-smithdb-overrides.yaml"
@@ -704,7 +648,7 @@ if [[ "$_enable_smithdb" == "true" ]]; then
   _smithdb_cache_storage=$(terraform -chdir="$INFRA_DIR" output -raw smithdb_cache_storage 2>/dev/null) || _smithdb_cache_storage=""
   _smithdb_cache_storage=$(_smithdb_cache_mode "$_smithdb_cache_storage" "$(_parse_tfvar "smithdb_cache_storage" || true)") || exit 1
   _smithdb_managed_values "$_smithdb_cache_storage"
-  _smithdb_sizing_tier_check "${_sizing_file:-}" "$SMITHDB_RESOURCE_TIER" || exit 1
+  _smithdb_base_tier_check "$VALUES_DIR/langsmith-values.yaml" "$SMITHDB_RESOURCE_TIER" || exit 1
   _smithdb_tier_fits "$SMITHDB_RESOURCE_TIER" "$_smithdb_cache_storage" || exit 1
   echo "  ✔ SmithDB ${SMITHDB_RESOURCE_TIER} tier fits node-group-smithdb (${_smithdb_cache_storage} cache)"
 fi
@@ -744,7 +688,7 @@ if [[ -n "$_live_lb" && -z "$_langsmith_domain" ]]; then
 fi
 
 echo ""
-echo "Deploying LangSmith (environment: $_environment, sizing: $_sizing_profile)..."
+echo "Deploying LangSmith (environment: $_environment)..."
 echo "  (waiting for pods — 5-10 min on a cold cluster while nodes provision)"
 echo ""
 
