@@ -8,9 +8,9 @@ including LangGraph Platform (Passes 3–5, `enable_deployments = true`).
 Switch by changing `ingress_controller` in `terraform.tfvars` and re-running `make apply`.
 
 > **Upgrading a deployment that runs ingress-nginx:** 0.18 removed `ingress_controller = "nginx"`.
-> `make plan` and `make apply` stop before Terraform runs while the Terraform state still holds
-> the ingress-nginx release. That includes a deployment that never set `ingress_controller` and
-> runs nginx as the old default. Move it on the previous release first: set
+> `make plan`, `make apply`, `make init-values`, and `make deploy` stop while the Terraform state
+> still holds the ingress-nginx release. That includes a deployment that never set
+> `ingress_controller` and runs nginx as the old default. Move it on the previous release first: set
 > `ingress_controller = "envoy-gateway"`, or another controller, then run `make apply`,
 > `make init-values`, and `make deploy` back to back. The apply removes ingress-nginx and its load
 > balancer IP, so LangSmith is unreachable until the deploy finishes. Update any DNS A record that

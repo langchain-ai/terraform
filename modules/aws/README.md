@@ -687,10 +687,11 @@ The manifest grants the `langsmith-host-backend` ServiceAccount (in the `langsmi
 
 ### Moving off NGINX ingress
 
-0.18 removed `enable_nginx_ingress`. Three checks stop an upgrade that would delete a running NGINX controller and leave the ALB with nothing behind it:
+0.18 removed `enable_nginx_ingress`. Four checks stop an upgrade that would delete a running NGINX controller, or route traffic away from it, and leave LangSmith unreachable:
 
 - `enable_nginx_ingress = true` in `terraform.tfvars` fails at plan, however Terraform runs. The `false` that earlier QuickStart runs wrote still plans.
 - `make apply` and `make quickdeploy` refuse while the Terraform state still holds the NGINX controller, even when `terraform.tfvars` no longer mentions it (`infra/scripts/upgrade-guard.sh`).
+- `make init-values` and `make deploy` stop while the last apply still ran NGINX, so the Helm steps cannot write or apply routing for a mode Terraform has not built.
 - `make quickstart` in update mode stops on a `terraform.tfvars` that sets `enable_nginx_ingress = true`, instead of preselecting ALB.
 
 To move off NGINX, keep the previous release and switch there: choose Envoy Gateway, Istio, or ALB, then run `make apply`, `make init-values`, and `make deploy` back to back. LangSmith is unreachable from the apply until the deploy finishes. Envoy Gateway and Istio keep the Terraform ALB and its hostname. ALB mode moves traffic to an ALB that the AWS Load Balancer Controller owns, so point DNS at its hostname. Upgrade after the deploy finishes.

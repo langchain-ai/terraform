@@ -17,7 +17,8 @@
 # Usage (from azure/):
 #   ./infra/scripts/guard-ingress-nginx.sh
 #
-# Run by make plan, make apply, make tf, and tf-run.sh. Exit 0 to continue, 1 to stop.
+# Run by make plan, make apply, make tf, and tf-run.sh, and first thing by
+# init-values.sh and deploy.sh. Exit 0 to continue, 1 to stop.
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_common.sh"

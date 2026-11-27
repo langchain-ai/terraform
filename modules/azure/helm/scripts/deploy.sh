@@ -74,6 +74,11 @@ echo "  LangSmith Azure — Helm Deploy"
 echo "══════════════════════════════════════════════════════"
 echo ""
 
+# Below, an unset ingress_controller means envoy-gateway, so a deployment still on
+# ingress-nginx would get a Gateway HTTP-01 ClusterIssuer and Gateway objects for
+# a controller Terraform has not installed.
+INFRA_DIR="$INFRA_DIR" bash "$HELM_DIR/../infra/scripts/guard-ingress-nginx.sh" || exit 1
+
 # ── Validate required values files ────────────────────────────────────────
 if [[ ! -f "$OVERRIDES_FILE" ]]; then
   fail "values-overrides.yaml not found"

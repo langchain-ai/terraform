@@ -11,6 +11,7 @@
 # Provides:
 #   _parse_tfvar <key>        — Read a value from terraform.tfvars
 #   _read_applied_flag <key> <default> — Resolve an applied boolean flag from Terraform outputs
+#   _stop_if_nginx_applied    — Return 1, with the reason, while the last apply ran NGINX ingress
 #   _use_cluster_kubeconfig <cluster> <region> — Export KUBECONFIG for one cluster
 #   _set_tfvar <key> <value>  — Set one key in terraform.tfvars, editing only its line
 #   _ssm_exists / _ssm_put    — Check or write an SSM parameter in $_region
@@ -112,6 +113,20 @@ _read_applied_flag() {
     val=$(_parse_tfvar "$key") || val="$default"
   fi
   echo "$val"
+}
+
+# 0.18 removed NGINX ingress. An enable_nginx_ingress output of true, left in
+# the state by an earlier release's apply, means the install still serves
+# through ingress-nginx: init-values.sh would write routing for a mode Terraform
+# has not built, and deploy.sh would apply it. The first 0.18 apply drops the
+# output, and terraform.tfvars then reads false or nothing.
+# Prints the reason and returns 1 when the install still runs NGINX.
+_stop_if_nginx_applied() {
+  [[ "$(_read_applied_flag "enable_nginx_ingress" false)" == "true" ]] || return 0
+  echo "ERROR: this install still runs NGINX ingress, which 0.18 removed." >&2
+  echo "       Keep the previous release until it has moved to Envoy Gateway, Istio, or ALB." >&2
+  echo "       See README.md, \"Moving off NGINX ingress\"." >&2
+  return 1
 }
 
 # Point kubectl and helm at one cluster without touching ~/.kube/config: write

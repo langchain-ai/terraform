@@ -49,6 +49,10 @@ if [[ ! -f "$INFRA_DIR/terraform.tfvars" ]]; then
   exit 1
 fi
 
+# Below, an unset ingress_controller means envoy-gateway, so a deployment still on
+# ingress-nginx would get routing for a controller Terraform has not installed.
+INFRA_DIR="$INFRA_DIR" bash "$HELM_DIR/../infra/scripts/guard-ingress-nginx.sh" || exit 1
+
 _name_prefix=$(_parse_tfvar "name_prefix") || _name_prefix=""
 _environment=$(_parse_tfvar "environment") || _environment="${_name_prefix:-dev}"
 _location=$(_parse_tfvar "location") || _location="eastus"
