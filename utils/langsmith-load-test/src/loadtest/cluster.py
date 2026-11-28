@@ -43,10 +43,16 @@ NAME = "app.kubernetes.io/name"
 # the disk a size is planned on, was read (magus, 2026-11-26).
 STORES = ("redis", "postgres", "rustfs")
 BUCKET_STORES = ("rustfs",)  # an object store: each folder at its volume's top is a bucket
+# Volumes read one folder deep: an object store's buckets, and SmithDB's data volume, whose ingest folder
+# holds every small segment until it is merged, large fields included, with nothing capping it.
+DEEP_VOLUMES = (*BUCKET_STORES, "smithdb")
 QUEUES = ("ingestion_queue", "feedback_queue", "adhoc_queue")
 REDIS_FIELDS = ("used_memory", "maxmemory", "evicted_keys", "connected_clients")
 QUEUE_LATENCY = "langsmith_asynq_queue_latency_seconds"
 EXPIRED_LINE = "Skipping run as it has expired"
+# SmithDB logs this when it cannot build a small segment's indexes, and never marks the segment committed,
+# so it is not merged and stays in every read (smithdb-ingestion run_segment_manager.rs, v18).
+INDEX_FAILED_LINE = "Index construction failed"
 POSTGRES_QUERY = "select count(*), current_setting('max_connections') from pg_stat_activity"
 # The image's own user and database: the chart's Postgres runs as postgres, the datastores chart's as the
 # user it was given, and psql -U postgres failed there.
@@ -142,8 +148,9 @@ CONTAINER_FIELD = {CPU: "seconds", THROTTLED: "throttled", PERIODS: "periods", M
 
 
 def _claim_mounts(spec: dict[str, Any]) -> list[tuple[str, str]]:
-    """(container, mount path) for each persistent volume claim the pod mounts."""
-    claims = {v["name"] for v in spec.get("volumes", []) if "persistentVolumeClaim" in v}
+    """(container, mount path) for each persistent volume claim the pod mounts, its own or ephemeral. SmithDB's
+    volume is a generic ephemeral one, and read by persistentVolumeClaim alone it was never sampled."""
+    claims = {v["name"] for v in spec.get("volumes", []) if "persistentVolumeClaim" in v or "ephemeral" in v}
     return [(c["name"], m["mountPath"]) for c in spec.get("containers", []) for m in c.get("volumeMounts", []) if m["name"] in claims]
 
 
@@ -303,7 +310,7 @@ class Collector:
         split, read by hand, was blobs 34 KiB a run and segments 86 (magus, box l, 2026-11-26)."""
         for pod in (p for p in pods if p["running"] and p["mounts"]):
             for container, mount in pod["mounts"]:
-                depth = ["-d", "1"] if pod["workload"] in BUCKET_STORES else ["-s"]
+                depth = ["-d", "1"] if pod["workload"] in DEEP_VOLUMES else ["-s"]
                 text = self.kube(["exec", "-n", pod["namespace"], pod["name"], "-c", container, "--", "du", "-k", *depth, mount])
                 read = parse_du(text or "", pod["workload"])
                 if f"{pod['workload']}:{mount}" in read:
@@ -346,13 +353,13 @@ class Collector:
         else:
             sample["unread"].append("postgres connections")
 
-    def expired_runs(self, since_seconds: float) -> int | None:
-        """Runs ingest-queue skipped as expired over the run, counted in its logs; None when unread.
-        ponytail: one log read of every ingest-queue pod at the end; at hundreds of pods read the
-        line from a log store instead."""
-        text = self.kube(["logs", "-n", self.ns, "-l", f"{COMPONENT}={self.release}-ingest-queue", f"--since={max(1, int(since_seconds))}s",
-                          "--tail=-1", "--max-log-requests=1000"])
-        return None if text is None else text.count(EXPIRED_LINE)
+    def log_lines(self, workloads: Sequence[str], line: str, since_seconds: float) -> int | None:
+        """How often these workloads' pods logged the line over the run; None when unread.
+        ponytail: one log read of every such pod at the end; at hundreds of pods read the line from a
+        log store instead."""
+        selector = f"{COMPONENT} in ({','.join(f'{self.release}-{w}' for w in workloads)})"
+        text = self.kube(["logs", "-n", self.ns, "-l", selector, f"--since={max(1, int(since_seconds))}s", "--tail=-1", "--max-log-requests=1000"])
+        return None if text is None else text.count(line)
 
     def _autoscalers(self, sample: Sample) -> None:
         doc = self._json("get", "hpa", "-n", self.ns, "-o", "json")
@@ -431,17 +438,20 @@ class Collector:
         self._thread.start()
 
     def stop(self) -> list[Sample]:
-        """Stop sampling, and count the runs ingest-queue skipped as expired since the first sample."""
+        """Stop sampling, and count in the logs since the first sample the runs ingest-queue skipped as expired
+        and the segments whose indexes SmithDB could not build."""
         self._stop.set()
         if self._thread is not None:
             self._thread.join()
         if self.samples:
             last = self.samples[-1]
-            expired = self.expired_runs(self.clock() - self.samples[0]["t"] + self.interval)
-            if expired is None:
-                last["unread"].append("ingest-queue logs")
-            else:
-                last["expired_runs"] = expired
+            since = self.clock() - self.samples[0]["t"] + self.interval
+            for key, workloads, line in (("expired_runs", ("ingest-queue",), EXPIRED_LINE), ("index_failures", ("smithdb", "smithdb-ingestion"), INDEX_FAILED_LINE)):
+                count = self.log_lines(workloads, line, since)
+                if count is None:
+                    last["unread"].append(f"{workloads[0]} logs")
+                else:
+                    last[key] = count
         return self.samples
 
 
@@ -707,6 +717,11 @@ def _expired(samples: Sequence[Sample], window: Sequence[Sample], workload: str)
     return None if count is None else {"during_run": count, "unit": "runs skipped as expired"}
 
 
+def _index_failures(samples: Sequence[Sample], window: Sequence[Sample], workload: str) -> dict[str, Any] | None:
+    count = samples[-1].get("index_failures") if samples else None
+    return None if count is None else {"during_run": count, "unit": "segments whose indexes failed"}
+
+
 def _redis_clients(samples: Sequence[Sample], window: Sequence[Sample], workload: str) -> dict[str, Any] | None:
     return _peak_end(_values(samples, _key("redis", "connected_clients")), "connected clients")
 
@@ -748,6 +763,7 @@ READERS: dict[str, Reader] = {
     "ingest_pending_segment_entry_count": _gauge("ingest_pending_segment_entry_count", level="l0"),
     QUEUE_LATENCY: _oldest_task,
     f"log:{EXPIRED_LINE}": _expired,
+    f"log:{INDEX_FAILED_LINE}": _index_failures,
     "connected_clients": _redis_clients,
     "pg_stat_activity": _postgres_connections,
     "kube_pod_container_status_last_terminated_reason": _oom,

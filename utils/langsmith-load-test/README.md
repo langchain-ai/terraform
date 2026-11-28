@@ -125,6 +125,19 @@ level 3 makes 2.7:1 of a field alone and 20:1 of a trace's fields in one stream.
 a field at a time; SmithDB's segments hold many runs, so its bucket shows which it gets (RustFS's
 buckets are read apart, `cluster.disk_bytes_per_run`).
 
+### Coding agents' traces: `--traces coding`
+
+The same tree with a coding agent's calibration, params.yaml's `load.coding_trace`, measured on
+LangChain's own coding agent in production (5.8 days, 44.6M runs, from SmithDB's runs export). Every
+trace calls tools, about seven model calls and 14 tool calls a trace. Each model call is wrapped in many
+tiny middleware runs that carry their own few bytes, not the conversation, so a trace holds about 1,300
+runs, 98% of them chains. The first message carries the task and the repository's context, and every
+model call resends it: a model call's input is 300 KB at the median, 2.6 MB at p95 and up to 19 MB. A
+run averages only about 13 KB, so a coding agent is heavy per model call and per trace (megabytes at the
+median, hundreds of megabytes in the tail), not per run. If the context reaches the model's window
+(`context_kib`), the agent replaces it with a summary. What the export could not say (messages a call,
+attachments, how much of a call's context repeats the last one's) is not modelled.
+
 ### The payload's shape
 
 A run's size is not the only thing that moves what ingest costs a core, so the shape is a profile field
@@ -256,7 +269,7 @@ kubectl -n langsmith auth can-i create pods/exec        # yes: in-cluster Redis 
 `load-test-report` draws one set of runs. `load-test-experiments OUT EXPERIMENT...` takes experiment
 folders (a folder a size, a folder a step, each with its `soak.json` and `soak.metrics.jsonl`, as Lite's
 `make experiment` writes them) and puts every size and every experiment on one scale: a scorecard of
-every step, whether it held and what failed it; lag and trace reads against the rate; every pod's cores, stacked by workload, with the spread and the busiest minute
+every step, whether it held and what failed it; the newest experiment against the one before it with the same traces, each step's pile of segments, trace reads and lag before and after, with how often SmithDB merged and the requests that changed most; lag and trace reads against the rate; every pod's cores, stacked by workload, with the spread and the busiest minute
 of every pod together; SmithDB's memory through each size's run; what a run keeps in each bucket and
 writes to disk; SmithDB's L1 segments waiting to merge against reads; and each service's cores a run a
 second, fitted. Spreads and peaks are of minutes, not of 15 s samples: Prometheus's counters move when

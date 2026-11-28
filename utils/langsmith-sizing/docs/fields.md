@@ -764,7 +764,7 @@ The same fields as the plan's `stores` and `warnings`, written for provisioning.
 | `write.payload.sizes_kib.<size>` | object | - | one size |
 | `write.payload.sizes_kib.<size>.in` | number | KiB | input size |
 | `write.payload.sizes_kib.<size>.out` | number | KiB | output size |
-| `write.payload.traces` | string | - | simple (a flat tree of runs, each a size from the mix) or agent (an agent's model and tool calls, params load.agent_trace) |
+| `write.payload.traces` | string | - | simple (a flat tree of runs, each a size from the mix), agent (an agent's model and tool calls, params load.agent_trace) or coding (a coding agent's, params load.coding_trace) |
 | `write.peak_traces_per_second` | number | traces/s | the busiest hour's rate |
 | `write.runs_per_trace` | number | runs | runs in one trace |
 | `write.traces_per_second` | number | traces/s | the average rate |

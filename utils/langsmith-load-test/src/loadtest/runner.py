@@ -187,7 +187,7 @@ class _Run:
             fields_per_side=shape.fields_per_side, content=shape.content, attachment_kib=shape.attachment_kib_per_run,
         )
         # Agent traces are built a trace at a time from their own seeded stream (payloads/agent.py).
-        self.agents = AgentTraces(AgentModel.from_params(), settings.data_seed) if shape.traces == "agent" else None
+        self.agents = AgentTraces(AgentModel.from_params(shape.traces), settings.data_seed) if shape.traces != "simple" else None
         self.counts = results.WriteCounts(
             mode="open-loop" if settings.traces_per_second else "closed-loop", target_traces_per_second=settings.traces_per_second,
         )

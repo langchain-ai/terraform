@@ -1,4 +1,4 @@
-"""Agent traces: what an application built on a chat model and tools sends, for --traces agent.
+"""Agent traces: what an application built on a chat model and tools sends, for --traces agent and coding.
 
 The simple traces (payloads/generator.py) give every run a size drawn on its own, in a flat tree of
 ten. Real traces are shaped otherwise, and the shape decides how many runs a trace holds, where its
@@ -17,6 +17,12 @@ Every model call carries the conversation so far, so a large tool result or a lo
 again by every later run; the root holds only the new message and the answer, the thread being the
 application's own state. Sizes and counts come from params.yaml's load.agent_trace, calibrated to what
 customers send (its source says which measurements).
+
+A coding agent (--traces coding, load.coding_trace) is the same tree with another calibration: every
+trace calls tools, its first message carries the task and the repository's context (hundreds of KB, MBs
+in the tail), every model call resends it, and each call is wrapped in many tiny middleware runs
+(wrapper_kib) rather than wrappers that carry the conversation. Should the context reach the model's
+window (context_kib), the agent replaces it with a summary (summary_kib) and carries on.
 
 A trace is planned first, as sizes, then written: the plan alone gives the size distribution and the
 mean runs a trace without generating text (`plan`, `runs_per_trace`). Each trace is drawn from its own
@@ -77,10 +83,14 @@ class AgentModel:
     result: Spread
     call: Spread
     answer: Spread
+    context_kib: float = math.inf
+    summary_kib: float = 0.0
+    wrapper: Spread | None = None  # a wrapper's own payload; None: it carries the conversation
 
     @classmethod
-    def from_params(cls) -> AgentModel:
-        return cls.from_value(sizing_params.values(sizing_params.load())["load.agent_trace"])
+    def from_params(cls, traces: str = "agent") -> AgentModel:
+        """params.yaml's load.<traces>_trace: agent or coding."""
+        return cls.from_value(sizing_params.values(sizing_params.load())[f"load.{traces}_trace"])
 
     @classmethod
     def from_value(cls, v: Mapping[str, Any]) -> AgentModel:
@@ -93,6 +103,8 @@ class AgentModel:
             history_messages=float(v["history_messages"]), system=spread("system_kib"), user=spread("user_kib"),
             history=spread("history_kib"), arguments=spread("arguments_kib"), result=spread("result_kib"),
             call=spread("call_kib"), answer=spread("answer_kib"),
+            context_kib=float(v.get("context_kib", math.inf)), summary_kib=float(v.get("summary_kib", 0.0)),
+            wrapper=spread("wrapper_kib") if "wrapper_kib" in v else None,
         )
 
 
@@ -161,14 +173,27 @@ def plan(model: AgentModel, source: random.Random) -> PlannedRun:
             tools = [PlannedRun(call.name, "tool", [call], [result], dict(graph)) for call, result in zip(message.calls, results, strict=True)]
             root.children.append(PlannedRun("tools", "chain", list(state), results, graph, tools))
             state += results
+            if sum(m.kib for m in (system, *state)) > model.context_kib:
+                state = _compact(model, state)
         else:
             root.outputs = [message]
     return root
 
 
+def _compact(model: AgentModel, state: list[Message]) -> list[Message]:
+    """The conversation replaced by a summary, as a coding agent does near its model's window: the user's
+    first message, the summary, and the turn in progress (the last assistant message and its results)."""
+    last = max(i for i, m in enumerate(state) if m.role == "assistant")
+    return [state[0], Message("user", model.summary_kib), *state[last:]]
+
+
 def _model_node(model: AgentModel, source: random.Random, system: Message, state: list[Message], message: Message, step: int) -> PlannedRun:
     graph = {"langgraph_step": 2 * step + 1, "langgraph_node": "model"}
-    wrappers = [PlannedRun(WRAPPERS[source.randrange(len(WRAPPERS))], "chain", list(state), [], dict(graph)) for _ in range(geometric(source, model.wrappers))]
+    # An application's wrappers carry the conversation; a coding agent's middleware runs are many and tiny
+    # (Open SWE: 98% of its runs are chains, the median of those with a size 37 bytes).
+    def carried() -> list[Message]:
+        return list(state) if model.wrapper is None else [Message("user", model.wrapper.draw(source))]
+    wrappers = [PlannedRun(WRAPPERS[source.randrange(len(WRAPPERS))], "chain", carried(), [], dict(graph)) for _ in range(geometric(source, model.wrappers))]
     call = PlannedRun("chat_model", "llm", [system, *state], [message], {**graph, **MODEL_METADATA})
     return PlannedRun("model", "chain", list(state), [message], graph, [*wrappers, call])
 

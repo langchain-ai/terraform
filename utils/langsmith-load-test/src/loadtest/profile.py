@@ -20,7 +20,7 @@ READ_CLASSES = ("list_traces", "read_trace", "project_stats", "feedback_stats", 
 SINGLE = "single"
 CONTENTS = ("text", "json", "base64")
 SENDS = ("post_then_patch", "post_once")
-TRACES = ("simple", "agent")
+TRACES = ("simple", "agent", "coding")
 
 
 @dataclass(frozen=True)

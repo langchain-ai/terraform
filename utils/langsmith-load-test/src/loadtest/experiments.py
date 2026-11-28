@@ -19,6 +19,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import statistics
 import tempfile
 from collections.abc import Callable, Sequence
@@ -56,6 +57,7 @@ class Step:
     samples: list[dict[str, Any]]
     label: str = ""
     plan: dict[str, Any] | None = None  # the size's plan as it ran (Lite's plan.json), when recorded
+    variant: str = ""  # what the step changed from the experiment's own traffic (Lite's lib/steps.yaml)
     minute0: float = 0.0  # minutes from the size's first sample to this step's first
     rows: dict[str, Any] = field(default_factory=dict)
 
@@ -65,14 +67,19 @@ class Step:
         return float(w.get("from", 0)), float(w.get("to", math.inf))
 
 
-def _step_folders(size_dir: Path) -> list[tuple[int, float, Path]]:
+# A step's folder: its number, its multiple and its variant (Lite's lib/steps.yaml): 3-2x, 5-1x-coding; 2x
+# from before steps were numbered.
+STEP_FOLDER = re.compile(r"(?:(\d+)-)?(\d+(?:\.\d+)?)x(?:-([a-z]+))?")
+
+
+def _step_folders(size_dir: Path) -> list[tuple[int, float, str, Path]]:
     found = []
     for folder in size_dir.iterdir():
-        if folder.is_dir() and folder.name.endswith("x") and (folder / "soak.json").exists():
-            head, _, multiple = folder.name.rpartition("-")
-            found.append((int(head) if head else 0, float(multiple[:-1]), folder))
+        m = STEP_FOLDER.fullmatch(folder.name)
+        if m and folder.is_dir() and (folder / "soak.json").exists():
+            found.append((int(m[1] or 0), float(m[2]), m[3] or "", folder))
     found.sort(key=lambda f: (f[0], f[1]))
-    return [(i, k, f) for i, (_, k, f) in enumerate(found, 1)]
+    return [(i, k, v, f) for i, (_, k, v, f) in enumerate(found, 1)]
 
 
 def settings(experiment: Path) -> dict[str, str]:
@@ -91,11 +98,11 @@ def load(experiment: Path) -> list[Step]:
         plan_file = experiment / size / "plan.json"
         plan = json.loads(plan_file.read_text()) if plan_file.exists() else None
         first = None
-        for index, multiple, folder in _step_folders(experiment / size):
+        for index, multiple, variant, folder in _step_folders(experiment / size):
             soak = json.loads((folder / "soak.json").read_text())
             samples = [json.loads(x) for x in (folder / "soak.metrics.jsonl").read_text().splitlines() if x.strip()]
             traces = (soak.get("write", {}).get("payload_shape") or {}).get("traces", "simple")
-            step = Step(experiment.name, traces, size, index, multiple, soak, samples, named or f"{traces} traces", plan)
+            step = Step(experiment.name, traces, size, index, multiple, soak, samples, named or f"{traces} traces", plan, variant)
             first = first if first is not None else (samples[0]["t"] if samples else 0.0)
             step.minute0 = ((samples[0]["t"] if samples else first) - first) / 60
             steps.append(step)
@@ -166,6 +173,12 @@ def missed(soak: dict[str, Any]) -> list[str]:
     return out
 
 
+def merges(step: Step) -> list[float]:
+    """When SmithDB merged its waiting segments into L1: the pile at least halves from 10 or more between two samples."""
+    pile = [(x["t"], float((x.get("smithdb") or {}).get(L1, 0))) for x in step.samples]
+    return [t for (_, a), (t, b) in zip(pile, pile[1:], strict=False) if a >= 10 and b < a / 2]
+
+
 def spread(values: Sequence[float]) -> tuple[float, float, float, float] | None:
     """(mean, p5, p95, max) of the values, or None with too few to say."""
     if len(values) < 3:
@@ -181,13 +194,14 @@ def describe(step: Step) -> dict[str, Any]:
     coefficients = c.get("coefficients") or {}
     disk = c.get("disk_bytes_per_run") or {}
     row: dict[str, Any] = {
-        "experiment": step.experiment, "label": step.label, "traces": step.traces, "size": step.size, "step": step.index, "multiple": step.multiple,
+        "experiment": step.experiment, "label": step.label, "traces": step.traces, "size": step.size, "step": step.index, "multiple": step.multiple, "variant": step.variant,
         "runs_per_second": c.get("runs_per_second_sent"), "runs_sent": s["stored"]["runs_sent"], "runs_stored": s["stored"]["runs_stored"],
         "payload_kib_per_run": s["write"].get("payload_kib_per_run"), "passed": s.get("passed"),
         "lag_p50_s": s["lag"].get("p50_seconds"), "lag_p99_s": s["lag"].get("p99_seconds"),
         "read_trace_p99_s": (reads.get("read_trace") or {}).get("p99_seconds"),
         "list_traces_p99_s": (reads.get("list_traces") or {}).get("p99_seconds"),
         "l1_peak": max((float((x.get("smithdb") or {}).get(L1, 0)) for x in step.samples), default=None),
+        "l1_merges": len(merges(step)),
         "fanout_refusals": (s.get("metrics", {}).get("query-fanout") or {}).get("during_run"),
         "storage_bytes_per_run": disk.get("rustfs:/data"), "blobs_bytes_per_run": disk.get("rustfs:/data/langsmith-blobs"),
         "segments_bytes_per_run": disk.get("rustfs:/data/smithdb"),
@@ -348,8 +362,10 @@ Plans = dict[tuple[str, str], dict[str, Any]]
 
 
 def step_label(row: dict[str, Any], same: Sequence[dict[str, Any]]) -> str:
-    """'2x', or '1x again' for a multiple the size ran before."""
-    again = any(r["multiple"] == row["multiple"] and r["step"] < row["step"] for r in same)
+    """'2x', '1x coding' for a step with a variant, or '1x again' for a plain multiple the size ran before."""
+    if row.get("variant"):
+        return f"{row['multiple']:g}x {row['variant']}"
+    again = any(r["multiple"] == row["multiple"] and not r.get("variant") and r["step"] < row["step"] for r in same)
     return f"{row['multiple']:g}x" + (" again" if again else "")
 
 
@@ -497,6 +513,104 @@ def smithdb(rows: list[dict[str, Any]], steps: list[Step], _plans: Plans) -> Fig
             "Right: every step's slowest trace reads against its pile; hollow are earlier experiments.", height, o)
 
 
+def _before(rows: Sequence[dict[str, Any]]) -> str | None:
+    """The experiment before the newest that sent the same traces: the one a change is read against."""
+    order = runs(rows)
+    traces = {r["traces"] for r in rows if r["experiment"] == order[-1]}
+    return next((e for e in order[-2::-1] if {r["traces"] for r in rows if r["experiment"] == e} == traces), None)
+
+
+def _merge_minutes(steps: Sequence[Step], experiment: str) -> tuple[float, int]:
+    """Minutes of load a merge, and the merges, over every step of the experiment. Not the gaps within a step: a
+    10-minute timer rarely fires twice in a 10-minute step, so those gaps were only the merges row counts forced."""
+    mine = [s for s in steps if s.experiment == experiment and len(s.samples) > 1]
+    minutes = sum((s.samples[-1]["t"] - s.samples[0]["t"]) / 60 for s in mine)
+    n = sum(len(merges(s)) for s in mine)
+    return (minutes / n if n else math.inf), n
+
+
+def _plan_changes(before: dict[str, Any], after: dict[str, Any], most: int = 3) -> list[str]:
+    """The largest changes between two plans: each workload's CPU and memory request, and Redis's maxmemory."""
+    got: list[tuple[float, str]] = []
+    for k, b in after.get("pods", {}).items():
+        a, name = before.get("pods", {}).get(k), PLAN_NAMES.get(k, k)
+        if a is None or name not in WORKLOADS:
+            continue
+        for key, what, unit, scale, fmt in (("mem_mi", "memory", "GiB", 1024, ".1f"), ("cpu_m", "CPU", "cores", 1000, ".2f")):
+            if a.get(key) and b.get(key) and a[key] != b[key]:
+                got.append((abs(math.log(b[key] / a[key])), f"{name} {what} {a[key] / scale:{fmt}} -> {b[key] / scale:{fmt}} {unit}"))
+    ra, rb = (p.get("data", {}).get("redis_maxmemory_mi") for p in (before, after))
+    if ra and rb and ra != rb:
+        got.append((abs(math.log(rb / ra)), f"redis maxmemory {ra / 1024:.1f} -> {rb / 1024:.1f} GiB"))
+    # The merge timing rides in the plan from 2026-11-27; earlier plans lack it, and the subtitle's measured
+    # cadence says what it did.
+    sa, sb = before.get("smithdb_merge"), after.get("smithdb_merge")
+    if sa and sb and sa != sb:
+        got.append((math.inf, "smithdb merge " + ", ".join(f"{k} {sa.get(k)} -> {v}" for k, v in sb.items() if sa.get(k) != v)))
+    return [t for _, t in sorted(got, reverse=True)[:most]]
+
+
+def _every(minutes: float) -> str:
+    return f"once every {minutes:.1f} minutes of load" if minutes < math.inf else "never"
+
+
+def change(rows: list[dict[str, Any]], steps: list[Step], plans: Plans) -> Figure:
+    """The newest experiment against the one before it with the same traces: each step's pile, reads and lag, before and after."""
+    before, after = _before(rows), runs(rows)[-1]
+    if before is None:
+        return None
+    pairs = []
+    for size in SIZES:
+        for step in sorted({r["step"] for r in rows if r["size"] == size and r["experiment"] == after}):
+            b = next(r for r in rows if (r["experiment"], r["size"], r["step"]) == (after, size, step))
+            # The same step only when it sent the same load: a later experiment's steps may differ.
+            a = next((r for r in rows if (r["experiment"], r["size"], r["step"], r["multiple"], r.get("variant", "")) ==
+                      (before, size, step, b["multiple"], b.get("variant", ""))), None)
+            if a is not None:
+                same = [r for r in rows if r["experiment"] == after and r["size"] == size]
+                pairs.append((size, step_label(b, same), a, b))
+    if not pairs:
+        return None
+    o: list[str] = []
+    rh, top = 34, 110
+    h = rh * len(pairs)
+    panels = (("l1_peak", "Most segments waiting", "segments", (0, 700), False, 300, "bar 300", (0, 350, 700)),
+              ("read_trace_p99_s", "Opening a trace, p99", "seconds (log)", (0.03, 30), True, 5, "target 5 s", (0.1, 1, 10)),
+              ("lag_p99_s", "Sent to readable, p99", "seconds (log)", (1, 100), True, 30, "target 30 s", (1, 10, 100)))
+    for i, (key, title, unit, yr, log, target, tlabel, tks) in enumerate(panels):
+        x0 = 230 + i * 420
+        p = Plot(x0, top, 340, h, yr, (0, len(pairs)), xlog=log)
+        o += [text(x0, top - 36, title, "t"), text(x0, top - 12, unit, "d")]
+        o += [f'<line x1="{p.x(t):.1f}" x2="{p.x(t):.1f}" y1="{top}" y2="{top + h}" class="grid"/>' + text(p.x(t), top + h + 26, f"{t:g}", "n", "middle") for t in tks]
+        o += [f'<line x1="{p.x(target):.1f}" x2="{p.x(target):.1f}" y1="{top}" y2="{top + h}" class="target"/>', text(p.x(target) + 6, top + h + 52, tlabel, "d")]
+        for j, (size, _, a, b) in enumerate(pairs):
+            y = top + j * rh + rh / 2
+            if a.get(key) is None or b.get(key) is None:
+                continue
+            xa, xb = p.x(min(max(a[key], yr[0]), yr[1])), p.x(min(max(b[key], yr[0]), yr[1]))
+            o.append(f'<line x1="{xa:.1f}" x2="{xb:.1f}" y1="{y:.1f}" y2="{y:.1f}" style="stroke:{SIZE_COLOUR[size]};stroke-width:2.5"/>')
+            o.append(f'<circle cx="{xa:.1f}" cy="{y:.1f}" r="7" style="fill:var(--bg);stroke:{SIZE_COLOUR[size]};stroke-width:2.5"/>')
+            o.append(f'<circle cx="{xb:.1f}" cy="{y:.1f}" r="7" style="fill:{SIZE_COLOUR[size]};stroke:{SIZE_COLOUR[size]};stroke-width:2.5"/>')
+    for j, (size, name, _, _) in enumerate(pairs):
+        o.append(text(0, top + j * rh + rh / 2 + 6, f"box {size} {name}", "n"))
+    y = top + h + 100
+    o += legend(0, y, [(label(rows, before), "var(--text-2)", "hollow"), (label(rows, after), "var(--text-2)", "dot")])
+    y += 56
+    o.append(text(0, y, "The requests that changed most in the plan", "t"))
+    for size in SIZES:
+        if (before, size) in plans and (after, size) in plans:
+            y += 32
+            said = _plan_changes(plans[(before, size)], plans[(after, size)])
+            o.append(text(0, y, f"box {size}   " + ("; ".join(said) or "no request changed"), "d"))
+    (ma, na), (mb, nb) = _merge_minutes(steps, before), _merge_minutes(steps, after)
+    worst = {e: max(r["read_trace_p99_s"] or 0 for _, _, *ab in pairs for r in ab if r["experiment"] == e) for e in (before, after)}
+    pile = {e: max(r["l1_peak"] or 0 for _, _, *ab in pairs for r in ab if r["experiment"] == e) for e in (before, after)}
+    return (f"From {label(rows, before)} to {label(rows, after)}, the most segments waiting fell from {pile[before]:.0f} to {pile[after]:.0f} "
+            f"and the slowest trace read from {worst[before]:.1f} s to {worst[after]:.1f} s",
+            f"Each row one step, the same size and multiple in both; hollow before, filled after. SmithDB merged its waiting segments "
+            f"{_every(mb)} after ({nb} merges), {_every(ma)} before ({na}).", y + 30, o)
+
+
 def per_run_cost(rows: list[dict[str, Any]], _steps: list[Step], _plans: Plans) -> Figure:
     """Millicores a run a second for the workloads that follow the rate, a fitted line an experiment."""
     o: list[str] = []
@@ -526,7 +640,9 @@ def per_run_cost(rows: list[dict[str, Any]], _steps: list[Step], _plans: Plans) 
 
 
 def ceiling(rows: Sequence[dict[str, Any]]) -> float:
-    """The highest multiple at and below which every step passed; 0 when the first failed."""
+    """The highest multiple at and below which every plain step passed; 0 when the first failed. A step with a
+    variant changes the traffic, and a stall step fails by design, so neither moves the ceiling."""
+    rows = [r for r in rows if not r.get("variant")]
     held_to = 0.0
     for k in sorted({r["multiple"] for r in rows}):
         if not all(r["passed"] for r in rows if r["multiple"] == k):
@@ -713,7 +829,7 @@ def _r2(pts: Sequence[tuple[float, float]], a: float, b: float) -> float:
 
 
 FIGURES: dict[str, Callable[[list[dict[str, Any]], list[Step], Plans], Figure]] = {
-    "scorecard": scorecard, "requests": requests, "machine": machine, "held": held, "cores": cores, "memory": memory, "disk": disk, "smithdb": smithdb, "per-run-cost": per_run_cost,
+    "scorecard": scorecard, "change": change, "requests": requests, "machine": machine, "held": held, "cores": cores, "memory": memory, "disk": disk, "smithdb": smithdb, "per-run-cost": per_run_cost,
 }
 
 

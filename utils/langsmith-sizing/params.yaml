@@ -482,6 +482,29 @@ params:
     source: {kind: decision, ref: "calibrated to LangSmith's sampled trace data (December 2025 to March 2026) and one customer's week of production runs (November 2026), LangChain-internal measurements (utils/langsmith-load-test, payloads/agent.py, 2026-11-26)"}
     by: Reed Bender
     since: 2026-11-26
+  load.coding_trace:
+    value:
+      agentic_share: 1.0
+      tool_turns: 5.7
+      tools_per_turn: [0.3, 0.3, 0.4]
+      wrappers: 160.0
+      history_messages: 0.0
+      system_kib: {median: 16.0, sigma: 0.2}
+      user_kib: {median: 160.0, sigma: 1.55, max: 18000}
+      history_kib: {median: 1.0, sigma: 1.0}
+      arguments_kib: {median: 0.3, sigma: 1.2, max: 64}
+      result_kib: {median: 3.3, sigma: 1.5, max: 17000}
+      call_kib: {median: 1.0, sigma: 0.8}
+      answer_kib: {median: 2.0, sigma: 0.8}
+      wrapper_kib: {median: 0.04, sigma: 1.0}
+      context_kib: 4000.0
+      summary_kib: 40.0
+    unit: "load.agent_trace's keys, plus wrapper_kib: a middleware run's own payload (its wrappers then carry no conversation), context_kib: the context at which the agent compacts it, and summary_kib: the summary that replaces it"
+    chart_has_no_key: "how a test shapes the traces it sends; the chart has no setting for the traffic it will see"
+    why: "A coding agent's trace for --traces coding. Calibrated to LangChain's production coding agent over 5.8 days (44.6M runs, 34,300 traces): runs a trace median 803, p95 4,462, p99 8,481, max 109,623, mean 1,300; 98.4% of runs framework chains, 0.5% model calls (6.7 a trace), 1.1% tool calls (14 a trace); a model call's input median 300 KB, p95 2.6 MB, p99 5.8 MB, max 19 MB, 99.4% of its bytes; a tool's output median 3.3 KB, p95 42 KB, p99 127 KB; metadata keys a run median 23, p95 86. Its traces are heavy per model call and per trace, not per run: about 13 KB a run across all runs (a lower bound: most chain sizes are not exported). The same export for LangChain's deepagents coding agent (174 traces) agreed on model calls (median 295 KB, p99 4.2 MB) with shorter traces (median 43 runs) and 65 metadata keys."
+    source: {kind: measurement, ref: "LangChain's SmithDB runs export (BigQuery), its production coding agents, 2026-11-21 to 2026-11-26, measured by Robin for Reed Bender on 2026-11-28; messages a model call, attachments and the overlap of resent context are not in the export"}
+    by: Reed Bender
+    since: 2026-11-28
   load.read_mix:
     value:
       list_traces: {weight: 45, component: query, what: "the most recent root runs in a project"}
@@ -614,7 +637,7 @@ params:
     by: Reed Bender
     since: 2026-11-18
   watch.metrics_other:
-    value: [ingestion_queue.pending, feedback_queue.pending, langsmith_asynq_queue_latency_seconds, "log:Skipping run as it has expired", used_memory, maxmemory, evicted_keys, connected_clients, pg_stat_activity, kube_horizontalpodautoscaler_status_current_replicas, kube_pod_container_status_last_terminated_reason, container_cpu_cfs_throttled_periods_total, container_cpu_cfs_periods_total]
+    value: [ingestion_queue.pending, feedback_queue.pending, langsmith_asynq_queue_latency_seconds, "log:Skipping run as it has expired", "log:Index construction failed", used_memory, maxmemory, evicted_keys, connected_clients, pg_stat_activity, kube_horizontalpodautoscaler_status_current_replicas, kube_pod_container_status_last_terminated_reason, container_cpu_cfs_throttled_periods_total, container_cpu_cfs_periods_total]
     unit: metric names
     why: "LangSmith's queue depths (the ones the chart's KEDA scalers read) and the age of its oldest queued task, the line ingest-queue logs when it drops an expired run, Redis INFO fields, Postgres's connections in use, and the Kubernetes series that show an autoscaler at its ceiling, a pod killed for memory and a CPU limit throttling."
     source: {kind: lab, ref: "platform-backend /metrics?format=json as the chart's KEDA scalers read it, Redis INFO, kube-state-metrics and cAdvisor series"}
@@ -630,6 +653,7 @@ params:
       - {id: feedback-backlog, workload: ingest-queue, metric: feedback_queue.pending, where: "platform-backend /metrics?format=json, feedback_queue.pending", threshold: null, meaning: "Feedback backs up while runs are still pending: feedback writes compete with runs.", action: "Turn on the dedicated mutations service (smithdb.mutations.enabled)."}
       - {id: oldest-queued-task, workload: ingest-queue, metric: langsmith_asynq_queue_latency_seconds, where: "platform-backend /metrics (Prometheus text), by queue", threshold: {value: 60, unit: "seconds the oldest task has waited"}, meaning: "A task a minute old says the workers are behind before the backlog count does; LangChain's load test stopped a step at 60 seconds.", action: "Raise ingest-queue's ceiling or its CPU; if Redis memory climbs too, the install is past its sizing."}
       - {id: expired-runs, workload: ingest-queue, metric: "log:Skipping run as it has expired", where: "ingest-queue logs: Skipping run as it has expired", threshold: {value: 0, unit: "runs skipped, any"}, meaning: "A run whose payload expired in Redis before ingest reached it is skipped and lost with no error.", action: "Keep redisRunsExpirySeconds above the worst backlog and give Redis the memory to hold it (configure.redis)."}
+      - {id: index-failures, workload: smithdb-ingestion, metric: "log:Index construction failed", where: "SmithDB's logs: Index construction failed", threshold: {value: 0, unit: "segments, any"}, meaning: "SmithDB could not build a small segment's indexes, so it never marks the segment ready to merge: it stays in every read of its project. Large documents and many metadata keys are what it indexes.", action: "Read the error in SmithDB's log, and offer it upstream with the run that failed: SmithDB's source calls it a bug."}
       - {id: pending-segments, workload: smithdb-ingestion, metric: ingest_pending_segment_entry_count, where: "each smithdb-ingestion pod /metrics", threshold: null, meaning: "Segments waiting to flush are rising: ingestion is falling behind its flushes.", action: "Add ingestion pods or memory; check object store latency (object-store-latency)."}
       - {id: compaction-jobs, workload: smithdb-compaction-worker, metric: compaction_queue_job_count, where: "each smithdb pod /metrics", topology: cluster, threshold: {from: "chart:smithdb.compactionWorker.autoscaling.keda.pendingJobsThreshold", unit: "pending jobs per worker"}, while: {from: "plan:scale.smithdb-compaction-worker.applied.max", unit: "replicas, compaction workers at their ceiling"}, meaning: "Jobs wait while workers cannot grow: compaction is behind.", action: "Raise the worker ceiling or the object store's request budget."}
       - {id: compaction-oldest-pending, workload: smithdb-compaction-worker, metric: compaction_queue_oldest_pending_created_at_seconds, where: "each smithdb pod /metrics", topology: cluster, threshold: null, meaning: "The oldest pending job's age passing the job timeout means jobs expire before they run; no timeout is set in the chart to compare with.", action: "Add compaction workers."}

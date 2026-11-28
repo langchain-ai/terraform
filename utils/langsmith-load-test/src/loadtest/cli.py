@@ -62,7 +62,7 @@ def build_parser(defaults: LoadSettings) -> argparse.ArgumentParser:
     load.add_argument("--feedback-per-trace", type=float, help="feedback writes per trace; the profile's or the model's default (load.feedback_per_trace) when omitted; 0 disables")
     load.add_argument("--data-seed", type=int, help="seed for repeatable text and size draws")
     shape = parser.add_argument_group("payload shape (each replaces the profile's; vary one at a time to measure what it costs)")
-    shape.add_argument("--traces", choices=TRACES, help="simple (a flat tree of runs, each a size from the mix) or agent (an agent's model and tool calls, its context resent every call)")
+    shape.add_argument("--traces", choices=TRACES, help="simple (a flat tree of runs, each a size from the mix), agent (an application's model and tool calls, its context resent every call) or coding (a coding agent: every trace tools for dozens of turns, its context grown to hundreds of KB and then compacted)")
     shape.add_argument("--fields-per-side", type=int, help="fields an input and an output each split into, the size spread evenly")
     shape.add_argument("--content", choices=CONTENTS, help="text (prose), json (a message list) or base64 (incompressible bytes)")
     shape.add_argument("--send", choices=SENDS, help="post_then_patch (a create, then an update) or post_once (a finished run in one request)")

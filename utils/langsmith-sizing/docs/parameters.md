@@ -149,6 +149,7 @@ self-hosted installs and never named. How each is used: [how-it-sizes.md](how-it
 | `load.feedback_per_trace` | 0.5 | feedback writes per trace | decision | Hari Narayan |
 | `load.payload_shape` | (a table: see params.yaml) | simple (runs_per_trace runs in a flat tree, each a size from the mix) or agent (load.agent_trace); fields an input and an output each split into; text, json or base64; post_then_patch or post_once; projects and the Zipf exponent of their spread; metadata keys a run; the most runs a request | decision | Reed Bender |
 | `load.agent_trace` | (a table: see params.yaml) | agentic_share: the share of traces that call tools; tool_turns: the mean model calls past the first in such a trace (1 plus a geometric count); tools_per_turn: the weights of 1, 2 and 3 calls a turn; wrappers and history_messages: geometric means; *_kib: lognormal sizes (median KiB, the sigma of the log, an optional max) | decision | Reed Bender |
+| `load.coding_trace` | (a table: see params.yaml) | load.agent_trace's keys, plus wrapper_kib: a middleware run's own payload (its wrappers then carry no conversation), context_kib: the context at which the agent compacts it, and summary_kib: the summary that replaces it | measurement | Reed Bender |
 | `load.read_mix` | (a table: see params.yaml) | relative weight per read | decision | Reed Bender |
 | `load.heavy_window_days` | 30 | days | field | Reed Bender |
 | `slo.stored_within_seconds` | {p99: 30} | s from send to readable | field | Ben Nagengast |

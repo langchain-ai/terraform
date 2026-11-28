@@ -147,6 +147,9 @@ class SummaryTest(unittest.TestCase):
         spec = {"volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "d"}}, {"name": "tmp", "emptyDir": {}}],
                 "containers": [{"name": "postgres", "volumeMounts": [{"name": "data", "mountPath": "/var/lib/postgresql"}, {"name": "tmp", "mountPath": "/tmp"}]}]}
         self.assertEqual(cluster._claim_mounts(spec), [("postgres", "/var/lib/postgresql")])
+        smithdb = {"volumes": [{"name": "cache", "ephemeral": {"volumeClaimTemplate": {}}}],
+                   "containers": [{"name": "smithdb", "volumeMounts": [{"name": "cache", "mountPath": "/data"}]}]}
+        self.assertEqual(cluster._claim_mounts(smithdb), [("smithdb", "/data")])
 
     def test_du_reads_a_volume_and_an_object_stores_buckets_apart(self) -> None:
         text = "6742408\t/data/langsmith-blobs\n17042860\t/data/smithdb\n23785272\t/data\n"
@@ -166,11 +169,13 @@ class SummaryTest(unittest.TestCase):
         fake.step()
         samples_ = collector.stop()
         self.assertEqual(samples_[-1]["expired_runs"], 2)
+        self.assertEqual(samples_[-1]["index_failures"], 1)
         logs = next(c for c in fake.calls if c[0] == "logs")
         self.assertIn("--since=30s", logs)
         self.assertIn("--tail=-1", logs)
         metrics, _ = cluster.summarize(samples_, WINDOW, 1000.0)
         self.assertEqual(metrics["expired-runs"], {"during_run": 2, "unit": "runs skipped as expired"})
+        self.assertEqual(metrics["index-failures"], {"during_run": 1, "unit": "segments whose indexes failed"})
 
 
 if __name__ == "__main__":

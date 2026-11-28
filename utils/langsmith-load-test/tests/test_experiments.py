@@ -26,7 +26,7 @@ def soak(traces: str = "agent") -> dict:
 class ExperimentsTest(unittest.TestCase):
     def test_steps_are_found_in_order_old_and_numbered_folders_alike(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            for size, folders in (("s", ("1-1x", "2-1x", "3-2x", "4-3x")), ("m", ("2x", "1x"))):
+            for size, folders in (("s", ("1-1x", "2-1x", "3-2x", "4-3x", "5-1x-coding", "notes")), ("m", ("2x", "1x"))):
                 for f in folders:
                     d = Path(tmp, size, f)
                     d.mkdir(parents=True)
@@ -34,7 +34,8 @@ class ExperimentsTest(unittest.TestCase):
                     (d / "soak.metrics.jsonl").write_text(json.dumps(sample(0, 0, 0)) + "\n")
             steps = experiments.load(Path(tmp))
         self.assertEqual([(s.size, s.index, s.multiple) for s in steps],
-                         [("s", 1, 1.0), ("s", 2, 1.0), ("s", 3, 2.0), ("s", 4, 3.0), ("m", 1, 1.0), ("m", 2, 2.0)])
+                         [("s", 1, 1.0), ("s", 2, 1.0), ("s", 3, 2.0), ("s", 4, 3.0), ("s", 5, 1.0), ("m", 1, 1.0), ("m", 2, 2.0)])
+        self.assertEqual([s.variant for s in steps if s.size == "s"], ["", "", "", "", "coding"])
 
     def test_spreads_are_of_minutes_so_a_counter_scraped_late_reads_its_rate(self) -> None:
         # The pods' counter moves every 30 s, not every 15: over minutes it reads its rate, 2 cores.
@@ -63,10 +64,19 @@ class ExperimentsTest(unittest.TestCase):
         self.assertEqual(experiments.ceiling(rows((1, True), (1, False), (2, True))), 0)  # a repeat that failed fails the multiple
         self.assertEqual(experiments.ceiling(rows((1, True), (2, True), (3, True))), 3)
 
+    def test_a_step_with_a_variant_does_not_move_the_ceiling(self) -> None:
+        rows = [{"multiple": 1.0, "passed": True, "variant": ""}, {"multiple": 1.0, "passed": False, "variant": "stall"},
+                {"multiple": 2.0, "passed": True, "variant": ""}]
+        self.assertEqual(experiments.ceiling(rows), 2.0)
+
     def test_a_failed_step_says_which_target_it_missed_and_a_refused_read(self) -> None:
         s = {"targets": {"trace_load_seconds_p99": {"passed": False}, "no_missing_runs": {"passed": True}}, "errors": {"reads": 80}}
         self.assertEqual(experiments.missed(s), ["reads slow", "reads refused"])
         self.assertEqual(experiments.missed({"targets": {}, "errors": {"reads": 0}}), [])
+
+    def test_a_step_with_a_variant_is_labelled_by_it_and_is_not_a_repeat(self) -> None:
+        same = [{"multiple": 1.0, "step": 1, "variant": ""}, {"multiple": 1.0, "step": 2, "variant": "coding"}, {"multiple": 1.0, "step": 3, "variant": ""}]
+        self.assertEqual([experiments.step_label(r, same) for r in same], ["1x", "1x coding", "1x again"])
 
     def test_a_repeated_multiple_is_labelled_again(self) -> None:
         same = [{"multiple": 1.0, "step": 1}, {"multiple": 1.0, "step": 2}, {"multiple": 2.0, "step": 3}]
@@ -90,6 +100,30 @@ class ExperimentsTest(unittest.TestCase):
         self.assertEqual(experiments.settings(root.parent / "none"), {})
         self.assertEqual(step.label, "agent traces on the measured plan")
         self.assertEqual(experiments._smithdb_limit_gib(step.plan), 6.0)
+
+    def test_a_merge_is_the_pile_halving_and_is_counted_over_minutes_of_load(self) -> None:
+        # A 10-minute timer fires at most once in a 10-minute step, so gaps within a step would time only
+        # the merges row counts forced; minutes of load a merge does not depend on the step's length.
+        pile = (0, 40, 80, 120, 10, 50, 90, 5, 8)
+        step = experiments.Step("e", "agent", "s", 1, 1.0, soak(), [sample(i * 60.0, 0, 0, v) for i, v in enumerate(pile)])
+        self.assertEqual(experiments.merges(step), [240.0, 420.0])
+        self.assertEqual(experiments._merge_minutes([step], "e"), (4.0, 2))
+        self.assertEqual(experiments._merge_minutes([step], "other"), (float("inf"), 0))
+
+    def test_a_change_is_read_against_the_last_experiment_with_the_same_traces(self) -> None:
+        rows = [{"experiment": e, "traces": t} for e, t in (("1", "simple"), ("2", "agent"), ("3", "simple"), ("4", "agent"))]
+        self.assertEqual(experiments._before(rows), "2")
+        self.assertIsNone(experiments._before(rows[:1]))
+
+    def test_the_plan_changes_are_the_requests_and_redis_that_moved_most(self) -> None:
+        before = {"pods": {"smithdb": {"cpu_m": 500, "mem_mi": 3072}, "ingestQueue": {"cpu_m": 300, "mem_mi": 1352}, "grafana": {"cpu_m": 50}},
+                  "data": {"redis_maxmemory_mi": 1087}}
+        after = {"pods": {"smithdb": {"cpu_m": 500, "mem_mi": 6144}, "ingestQueue": {"cpu_m": 90, "mem_mi": 1352}, "grafana": {"cpu_m": 10}},
+                 "data": {"redis_maxmemory_mi": 516}, "smithdb_merge": {"l1_timeout_minutes": 4}}
+        self.assertEqual(experiments._plan_changes(before, after),
+                         ["ingest-queue CPU 0.30 -> 0.09 cores", "redis maxmemory 1.1 -> 0.5 GiB", "smithdb memory 3.0 -> 6.0 GiB"])
+        merged = {**before, "smithdb_merge": {"l1_timeout_minutes": 10}}
+        self.assertEqual(experiments._plan_changes(merged, after)[0], "smithdb merge l1_timeout_minutes 10 -> 4")
 
     def test_the_figures_that_need_a_plan_skip_without_one(self) -> None:
         self.assertIsNone(experiments.requests([], [], {}))

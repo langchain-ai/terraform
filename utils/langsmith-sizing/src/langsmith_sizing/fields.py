@@ -620,7 +620,7 @@ LOAD_PROFILE_DESCRIPTIONS: D = {
     "write.payload.single_run_kib": ("KiB", "[input, output] when one size replaces the mix, else null"),
     "write.payload.single_run_kib[]": ("KiB", "the input size, then the output size"),
     "write.payload.attachment_kib_per_run": ("KiB", "attachment bytes the test sends with each run; 0 sends none"),
-    "write.payload.traces": ("", "simple (a flat tree of runs, each a size from the mix) or agent (an agent's model and tool calls, params load.agent_trace)"),
+    "write.payload.traces": ("", "simple (a flat tree of runs, each a size from the mix), agent (an agent's model and tool calls, params load.agent_trace) or coding (a coding agent's, params load.coding_trace)"),
     "write.payload.fields_per_side": ("count", "fields the input and the output each split into, the size spread evenly"),
     "write.payload.content": ("-", "text (prose), json (a message list) or base64 (incompressible bytes)"),
     "write.payload.send": ("-", "post_then_patch (a create, then an update) or post_once (a finished run in one request)"),
