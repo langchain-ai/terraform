@@ -27,6 +27,10 @@ createNamespaces: true
 #   rustfs-credentials               access-key, secret-key, and aws-credentials (AWS CLI format)
 existingSecrets: false
 
+# A PriorityClass for every store's pod (runtime statefulset), which must already exist: above the app's,
+# so under node pressure the kubelet evicts app pods before a store. Empty: the cluster's default.
+priorityClassName: ""
+
 # Namespaces whose pods may connect to every store (NetworkPolicy): LangSmith's.
 allowedNamespaces:
   - langsmith

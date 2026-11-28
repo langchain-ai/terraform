@@ -1,0 +1,23 @@
+why: "The modules' production-large profile: the scale guide's High read and write load."
+inputs:
+  users: 50
+  peak_traces_per_second: 1000
+  traces_per_second: 333
+  runs_per_trace: 10
+  postgres: external
+  redis: external
+  smithdb_metastore: external
+  object_store: external
+  trace_store: smithdb
+  survives_node_loss: true
+notes:
+  users: "The scale guide's High read load, about 50 users."
+  peak_traces_per_second: "The scale guide's High write load, up to 1,000 traces a second."
+  traces_per_second: "The busiest rate over the default peak factor of 3."
+  runs_per_trace: "The model's default of 10 runs a trace, stated so the plan does not move if the default does."
+  trace_store: "SmithDB alone: ClickHouse is the deprecated store and is sized only while a migration runs."
+  redis: "A managed Redis, as the module's profile assumes."
+  postgres: "A managed Postgres, as the module's profile assumes."
+  smithdb_metastore: "A managed Postgres of its own, sized by the SmithDB tier."
+  object_store: "A bucket, as the module's profile assumes."
+  survives_node_loss: "Serving pods keep at least two replicas, so losing a node does not stop the install."

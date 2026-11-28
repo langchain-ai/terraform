@@ -1,0 +1,266 @@
+# Numbers the public docs publish, each with the exact text that states it. `langsmith-sizing
+# check-citations` fails when a quote is no longer in its file at the commit below; with `--ref main`
+# it says whether the docs moved since. Update the commit only after re-reading every citation.
+repo: langchain-ai/docs
+commit: 96a94d110402cbda3f5dcf0ae40c94470c77026f
+citations:
+  blob_storage.required_from:
+    file: src/langsmith/self-hosted-changelog.mdx
+    quote: Blob storage is required starting in v0.18. Set up blob storage before upgrading to that version.
+    values: {line: "0.18", unit: chart line}
+  blob_storage.attachments:
+    file: src/langsmith/self-host-blob-storage.mdx
+    quote: LangSmith supports storing run inputs, outputs, errors, manifests, extras, events, and attachments in an external blob storage system.
+    values: {holds: attachments, unit: "-"}
+  scale.read_anchors:
+    file: src/langsmith/self-host-scale.mdx
+    quote: Low means roughly 5 users looking at traces at a time (about 10 requests per second) - Medium means roughly 20 users looking at traces at a time (about 40 requests per second) - High means roughly 50 users looking at traces at a time (about 100 requests per second)
+    values:
+      low: 5
+      medium: 20
+      high: 50
+      unit: concurrent frontend users
+      rps: {low: 10, medium: 40, high: 100}
+  scale.write_anchors:
+    file: src/langsmith/self-host-scale.mdx
+    quote: Low means up to 10 traces submitted per second - Medium means up to 100 traces submitted per second - High means up to 1000 traces submitted per second
+    values: {low: 10, medium: 100, high: 1000, unit: traces/s}
+  scale.replicas.frontend:
+    file: src/langsmith/self-host-scale.mdx
+    quote: '**Frontend replicas**<br />(500m CPU, 1Gi requested per replica) | 1 (default) | 4 | 2 | 2 | 4'
+    values: {ll: 1, lh: 4, hl: 2, mm: 2, hh: 4}
+  scale.replicas.platform_backend:
+    file: src/langsmith/self-host-scale.mdx
+    quote: '**Platform backend replicas**<br />(1 CPU, 2Gi requested per replica) | 3 (default) | 20 | 3 (default) | 3 (default) | 20'
+    values: {ll: 3, lh: 20, hl: 3, mm: 3, hh: 20}
+  scale.replicas.ingest_queue:
+    file: src/langsmith/self-host-scale.mdx
+    quote: '**Ingest queue replicas**<br />(1 CPU, 2Gi requested per replica) | 3 (default) | 24 | 3 (default) | 6 | 24'
+    values: {ll: 3, lh: 24, hl: 3, mm: 6, hh: 24}
+  scale.replicas.backend:
+    file: src/langsmith/self-host-scale.mdx
+    quote: '**Backend replicas**<br />(1 CPU, 2Gi requested per replica) | 2 (default) | 5 | 40 | 16 | 50'
+    values: {ll: 2, lh: 5, hl: 40, mm: 16, hh: 50}
+  scale.redis_gib:
+    file: src/langsmith/self-host-scale.mdx
+    quote: '**Redis resources** | 8 Gi (default) | 26 Gi external | 8 Gi (default) | 13Gi external | 26 Gi external'
+    values: {ll: 8, lh: 26, hl: 8, mm: 13, hh: 26}
+  scale.clickhouse:
+    file: src/langsmith/self-host-scale.mdx
+    quote: '**ClickHouse resources** | 4 CPU<br />16 Gi (default) | 10 CPU<br />32Gi memory | 8 CPU<br />16 Gi per replica | 16 CPU<br />24Gi memory | 14 CPU<br />24 Gi per replica'
+    values:
+      cpu: {ll: 4, lh: 10, hl: 8, mm: 16, hh: 14}
+      mem_gib: {ll: 16, lh: 32, hl: 16, mm: 24, hh: 24}
+      per_replica: [hl, hh]
+  scale.clickhouse_setup:
+    file: src/langsmith/self-host-scale.mdx
+    quote: '**ClickHouse setup** | Single instance | Single instance | 3-node <Tooltip tip="Recommended for high read loads to prevent degraded performance.'
+    values:
+      single: 1
+      replicated: 3
+      replicated_in: [hl, hh]
+  scale.postgres:
+    file: src/langsmith/self-host-scale.mdx
+    quote: 2 CPU<br />8 GB memory<br />10 GB storage (external)
+    values: {cpu: 2, memory_gb: 8, storage_gb: 10}
+  scale.clickhouse_disk.medium:
+    file: src/langsmith/self-host-scale.mdx
+    quote: We recommend 60Gi for every shortlived TTL day
+    values: {traces_per_second: 100, gi_per_day: 60}
+  scale.clickhouse_disk.high:
+    file: src/langsmith/self-host-scale.mdx
+    quote: 600 Gi of volume storage for each day of TTL that you enable
+    values: {traces_per_second: 1000, gi_per_day: 600}
+  scale.min_replicas.frontend.lh: {file: src/langsmith/self-host-scale.mdx, quote: 'frontend: deployment: replicas: 4 # OR enable autoscaling below # autoscaling: # hpa: # enabled: true # minReplicas: 2 # maxReplicas: 4', values: 2}
+  scale.min_replicas.platform_backend.lh: {file: src/langsmith/self-host-scale.mdx, quote: 'platformBackend: deployment: replicas: 20 # OR enable autoscaling below # autoscaling: # hpa: # enabled: true # minReplicas: 8 # maxReplicas: 20', values: 8}
+  scale.min_replicas.ingest_queue.lh: {file: src/langsmith/self-host-scale.mdx, quote: 'ingestQueue: deployment: replicas: 24 # OR enable KEDA autoscaling below # autoscaling: # keda: # enabled: true # minReplicaCount: 8 # maxReplicaCount: 24', values: 8}
+  scale.min_replicas.backend.lh: {file: src/langsmith/self-host-scale.mdx, quote: 'backend: deployment: replicas: 5 # OR enable autoscaling below # autoscaling: # hpa: # enabled: true # minReplicas: 3 # maxReplicas: 5', values: 3}
+  scale.min_replicas.ingest_queue.hl: {file: src/langsmith/self-host-scale.mdx, quote: 'ingestQueue: deployment: replicas: 3 # OR enable KEDA autoscaling below # autoscaling: # keda: # enabled: true # minReplicaCount: 2 # maxReplicaCount: 3', values: 2}
+  scale.min_replicas.backend.hl: {file: src/langsmith/self-host-scale.mdx, quote: 'backend: deployment: replicas: 40 # OR enable autoscaling below # autoscaling: # hpa: # enabled: true # minReplicas: 16 # maxReplicas: 40', values: 16}
+  scale.min_replicas.ingest_queue.mm: {file: src/langsmith/self-host-scale.mdx, quote: 'ingestQueue: deployment: replicas: 6 # OR enable KEDA autoscaling below # autoscaling: # keda: # enabled: true # minReplicaCount: 3 # maxReplicaCount: 6', values: 3}
+  scale.min_replicas.backend.mm: {file: src/langsmith/self-host-scale.mdx, quote: 'backend: deployment: replicas: 16 # OR enable autoscaling below # autoscaling: # hpa: # enabled: true # minReplicas: 8 # maxReplicas: 16', values: 8}
+  scale.min_replicas.frontend.hh: {file: src/langsmith/self-host-scale.mdx, quote: 'frontend: deployment: replicas: 4 # OR enable autoscaling below # autoscaling: # hpa: # enabled: true # minReplicas: 2 # maxReplicas: 4', values: 2}
+  scale.min_replicas.platform_backend.hh: {file: src/langsmith/self-host-scale.mdx, quote: 'platformBackend: deployment: replicas: 20 # OR enable autoscaling below # autoscaling: # hpa: # enabled: true # minReplicas: 8 # maxReplicas: 20', values: 8}
+  scale.min_replicas.ingest_queue.hh: {file: src/langsmith/self-host-scale.mdx, quote: 'ingestQueue: deployment: replicas: 24 # OR enable KEDA autoscaling below # autoscaling: # keda: # enabled: true # minReplicaCount: 8 # maxReplicaCount: 24', values: 8}
+  scale.min_replicas.backend.hh: {file: src/langsmith/self-host-scale.mdx, quote: 'backend: deployment: replicas: 50 # OR enable autoscaling below # autoscaling: # hpa: # enabled: true # minReplicas: 20 # maxReplicas: 50', values: 20}
+  smithdb.tested_qps:
+    file: src/langsmith/self-host-smithdb-scale.mdx
+    quote: Small<br />10 ingest / 10 query QPS | Medium<br />100 ingest / 40 query QPS | Large<br />1000 ingest / 100 query QPS
+    values:
+      small: {ingest: 10, query: 10}
+      medium: {ingest: 100, query: 40}
+      large: {ingest: 1000, query: 100}
+  smithdb.replicas.ingestion:
+    file: src/langsmith/self-host-smithdb-scale.mdx
+    quote: Ingestion | 1 replica<br />4 CPU<br />8 Gi memory<br />100 Gi cache | 1 replica<br />16 CPU<br />32 Gi memory<br />100 Gi cache | 2 replicas<br />56 CPU<br />150 Gi memory<br />1000 Gi cache
+    values: {small: 1, medium: 1, large: 2}
+  smithdb.replicas.query:
+    file: src/langsmith/self-host-smithdb-scale.mdx
+    quote: Query | 1 replica<br />4 CPU<br />8 Gi memory<br />200 Gi cache | 1 replica<br />28 CPU<br />48 Gi memory<br />200 Gi cache | 4 replicas<br />28 CPU<br />50 Gi memory<br />1000 Gi cache
+    values: {small: 1, medium: 1, large: 4}
+  smithdb.replicas.compaction:
+    file: src/langsmith/self-host-smithdb-scale.mdx
+    quote: Compaction | 1 replica<br />2 CPU<br />4 Gi memory | 1 replica<br />4 CPU<br />8 Gi memory | 1 replica<br />8 CPU<br />16 Gi memory
+    values: {small: 1, medium: 1, large: 1}
+  smithdb.replicas.compaction-worker:
+    file: src/langsmith/self-host-smithdb-scale.mdx
+    quote: Compaction worker | 1 replica<br />8 CPU<br />16 Gi memory<br />100 Gi cache | 1 replica<br />16 CPU<br />32 Gi memory<br />100 Gi cache | 4 replicas<br />28 CPU<br />50 Gi memory<br />300 Gi cache
+    values: {small: 1, medium: 1, large: 4}
+  smithdb.replicas.cluster-manager:
+    file: src/langsmith/self-host-smithdb-scale.mdx
+    quote: Cluster manager | 1 replica<br />250m CPU<br />256 Mi memory | 1 replica<br />250m CPU<br />256 Mi memory | 1 replica<br />2 CPU<br />2 Gi memory
+    values: {small: 1, medium: 1, large: 1}
+  smithdb.metastore:
+    file: src/langsmith/self-host-smithdb-scale.mdx
+    quote: Small | 2 | 16 GiB | | Medium | 4 | 32 GiB | | Large | 8 | 64 GiB
+    values:
+      small: {cpu: 2, memory_gib: 16}
+      medium: {cpu: 4, memory_gib: 32}
+      large: {cpu: 8, memory_gib: 64}
+  smithdb.metastore_postgres:
+    file: src/langsmith/self-host-smithdb-infrastructure.mdx
+    quote: Use PostgreSQL 18 or later and allow database connections from the Kubernetes cluster.
+    values: {min_major_version: 18}
+  smithdb.cache_volume:
+    file: src/langsmith/self-host-smithdb-infrastructure.mdx
+    quote: Cluster default StorageClasses are usually too slow for the cache. Provision at least 7000 IOPS and 1000 MiB/s per volume
+    values: {min_iops: 7000, min_mib_per_second: 1000}
+  smithdb.backfill:
+    file: src/langsmith/self-host-smithdb-migrate.mdx
+    quote: estimated allocated vCPUs = historical run count / 5,000,000 / target duration in days
+    values: {runs_per_vcpu_day: 5000000}
+  smithdb.backfill_pod_memory:
+    file: src/langsmith/self-host-smithdb-migrate.mdx
+    quote: treat 32 GiB as a practical minimum rather than a function of CPU
+    values: {min_memory_gib: 32}
+  # Add-ons beyond tracing. Each one's pods are read from the chart where it sets resources; these are
+  # the figures the docs publish for what the chart does not render (Agent Server's per-deployment
+  # pods, the operator creates them) or does not decide (how many sandbox hosts, gateway replicas).
+  agent_server.load_levels:
+    file: src/langsmith/agent-server-scale.mdx
+    quote: "- Low means approximately 5 requests per second - Medium means approximately 50 requests per second - High means approximately 500 requests per second"
+    values: {low: 5, medium: 50, high: 500, unit: requests/s a deployment}
+  agent_server.api_servers:
+    file: src/langsmith/agent-server-scale.mdx
+    quote: '| **API servers**<br />(1 CPU, 2Gi per server) | 1 (default) | 6 | 10 | 3 | 15 |'
+    values: {cpu: 1, memory_gib: 2, replicas: {ll: 1, lh: 6, hl: 10, mm: 3, hh: 15}}
+  agent_server.queue_workers:
+    file: src/langsmith/agent-server-scale.mdx
+    quote: '| **Queue workers**<br />(1 CPU, 2Gi per worker) | 1 (default) | 10 | 1 (default) | 5 | 10 |'
+    values: {cpu: 1, memory_gib: 2, replicas: {ll: 1, lh: 10, hl: 1, mm: 5, hh: 10}}
+  agent_server.n_jobs_per_worker:
+    file: src/langsmith/agent-server-scale.mdx
+    quote: '| **`N_JOBS_PER_WORKER`** | 10 (default) | 50 | 10 | 10 | 50 |'
+    values: {ll: 10, lh: 50, hl: 10, mm: 10, hh: 50}
+  agent_server.redis:
+    file: src/langsmith/agent-server-scale.mdx
+    quote: '| **Redis resources** | 1 CPU<br />2 Gi (default) | 1 CPU<br />2 Gi (default) | 1 CPU<br />2 Gi (default) | 1 CPU<br />2 Gi (default) | 1 CPU<br />2 Gi (default) |'
+    values: {cpu: 1, memory_gib: 2}
+  agent_server.postgres:
+    file: src/langsmith/agent-server-scale.mdx
+    quote: '| **Postgres resources** | 2 CPU<br />8 Gi (default) | 4 CPU<br />16 Gi memory | 4 CPU<br />16 Gi | 4 CPU<br />16 Gi memory | 8 CPU<br />32 Gi memory |'
+    values: {cpu: {ll: 2, lh: 4, hl: 4, mm: 4, hh: 8}, memory_gib: {ll: 8, lh: 16, hl: 16, mm: 16, hh: 32}}
+  agent_server.limit_default:
+    file: src/langsmith/data-plane.mdx
+    quote: "If you omit the limit, it defaults to 2x the request, so lowering the request also lowers the scaling target."
+    values: {limit_over_request: 2}
+  agent_server.requires:
+    file: src/langsmith/enable-self-hosted-agent-server.mdx
+    quote: "KEDA automatically scales the deployment system based on queue size."
+    values: {requires: [KEDA, an ingress with config.hostname]}
+  gateway.streams_per_replica:
+    file: src/langsmith/llm-gateway-self-hosted.mdx
+    quote: "With the default resources, each replica handled ~100 concurrent streams on N2 instances or similar in testing, with prompts from ~40 to ~7,500 tokens."
+    values: {streams: 100}
+  gateway.stores:
+    file: src/langsmith/llm-gateway-self-hosted.mdx
+    quote: "The `agent-gateway` service requires access to Postgres and Redis, and network access to other LangSmith pods, similar to `backend` and `platform-backend`."
+    values: {stores: [postgres, redis]}
+  engine.requires_sandboxes:
+    file: src/langsmith/engine-self-hosted.mdx
+    quote: "Engine is disabled by default. It requires [Sandboxes](/langsmith/enable-self-hosted-sandboxes), a connection to [LangSmith Intelligence](#allow-egress-to-langsmith-intelligence) unless your installation is [air-gapped](#air-gapped-installations), an externally reachable [`config.hostname`](#verify-your-hostname-is-externally-reachable), and [Engine's keys](#generate-engines-keys)."
+    values: {requires: [sandboxes]}
+  engine.shares_insights:
+    file: src/langsmith/engine-self-hosted.mdx
+    quote: "Engine and [Insights](/langsmith/self-host-insights-chat) run from the same image and share one deployment."
+    values: {shares: insights}
+  fleet.own_stores:
+    file: src/langsmith/enable-self-hosted-fleet.mdx
+    quote: "Fleet uses dedicated PostgreSQL and Redis instances by default."
+    values: {postgres: own, redis: own}
+  insights_chat.keys:
+    file: src/langsmith/self-host-insights-chat.mdx
+    quote: "Each feature requires its own Fernet encryption key and model access."
+    values: {key: Fernet}
+  sandboxes.hosts:
+    file: src/langsmith/self-host-sandbox-scaling.mdx
+    quote: "desired hosts = ceil(committed vCPU / (host vCPU × target fraction)) + headroom hosts"
+    values: {formula: "ceil(committed_vcpu / (host_vcpu * target)) + headroom"}
+  sandboxes.target:
+    file: src/langsmith/self-host-sandbox-scaling.mdx
+    quote: '| `targetUtilizationPercent` | `70` |'
+    values: {pct: 70}
+  sandboxes.headroom:
+    file: src/langsmith/self-host-sandbox-scaling.mdx
+    quote: '| `headroomHosts` | `1` |'
+    values: {hosts: 1}
+  sandboxes.min_hosts:
+    file: src/langsmith/self-host-sandbox-scaling.mdx
+    quote: '| `minReplicas` | `1` | Use at least `2` to avoid zero ready hosts during a normal rollout. |'
+    values: {hosts: 2}
+  sandboxes.memory:
+    file: src/langsmith/self-host-sandbox-scaling.mdx
+    quote: "500 sandboxes configured with 2 GiB each request 1,000 GiB of guest memory, before host and filesystem overhead."
+    values: {memory_gib_each: 2}
+  sandboxes.cpu_only:
+    file: src/langsmith/self-host-sandbox-scaling.mdx
+    quote: "Host autoscaling uses committed CPU, not memory pressure."
+    values: {signal: committed vCPU}
+  sandboxes.host_memory:
+    file: src/langsmith/self-host-sandbox-scaling.mdx
+    quote: "The host pod's memory request must reflect the workloads it contains."
+    values: {rule: host memory request covers its guests}
+  sandboxes.cache:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: "which defaults to `/var/cache/juicefs` with a 50 GiB cache size."
+    values: {cache_gib: 50}
+  sandboxes.juicefs_redis:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: "For the Redis metadata store, we recommend setting `maxmemory-policy` to `noeviction`."
+    values: {maxmemory_policy: noeviction}
+  sandboxes.nodes:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: "Your cluster must include dedicated nodes that can run nested workloads with Linux KVM available at `/dev/kvm`."
+    values: {requires: [dedicated KVM nodes]}
+  sandboxes.node_arch:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: "- **CPU architecture**: x86-64 (`amd64`). The sandbox runtime does not run on Arm nodes."
+    values: {requires: [x86-64]}
+  sandboxes.node_cgroup:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: "- **cgroup v2**: The unified cgroup hierarchy with the `cpu` controller available."
+    values: {requires: [cgroup v2 with the cpu controller]}
+  sandboxes.node_devices:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: "- **TUN/TAP and FUSE**: `/dev/net/tun` for sandbox network interfaces and `/dev/fuse` for the JuiceFS mount."
+    values: {requires: [/dev/net/tun, /dev/fuse]}
+  sandboxes.node_nftables:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: "- **nftables**: Kernel support for `iptables` with the nftables backend."
+    values: {requires: [nftables]}
+  sandboxes.one_host_per_node:
+    file: src/langsmith/self-host-sandbox-architecture.mdx
+    quote: "The host Deployment uses required pod anti-affinity to place at most one host pod on each node."
+    values: {host_pods_per_node: 1}
+  sandboxes.privileged:
+    file: src/langsmith/self-host-sandbox-architecture.mdx
+    quote: "Host pods require privileged access for virtualization, networking, and mounts."
+    values: {requires: [privileged pods]}
+  sandboxes.node_label:
+    file: src/langsmith/enable-self-hosted-sandboxes.mdx
+    quote: 'sandbox.langsmith.com/host: "true"'
+    values: {label: sandbox.langsmith.com/host=true}
+  gateway.tested_requests:
+    file: src/langsmith/llm-gateway-self-hosted.mdx
+    quote: "  #     requests: { cpu: 1, memory: 1Gi }"
+    values: {cpu: 1, memory_gib: 1}

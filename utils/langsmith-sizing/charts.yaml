@@ -1,0 +1,5 @@
+# The chart versions CI renders: every test and `make params` runs against each, so a parameter that
+# would shadow a chart default, or a default a release changed, fails here before a plan uses it. A
+# command without --chart takes the newest release in the chart repository instead (chart.resolve),
+# and a plan on a chart outside this list says so. Add a new line's version here, then `make check`.
+planned: [0.17.60, 0.18.0-rc.82]

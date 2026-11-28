@@ -1,0 +1,24 @@
+# What LangChain's engineering load test measured at each rate it held (Ben Nagengast, GKE, chart
+# 0.17.48, 2026-11): about 128 KB a run, 20 runs a trace, no read load, a sandbox cluster. Each case is
+# the test's own settings as inputs, and what ran as `measured`. tests/test_scale_test.py holds the
+# plan to it: never under 0.9x what ran, never over 1.6x, so a plan covers the load without doubling it.
+# Ingest vCPU is held to the floor only: the field curve the tiers use sits about 4x above this test, and
+# the plan takes the larger until runs that vary the payload shape say which holds.
+# Requested vCPU, not used: workers ran at about half their request. Partitions are left out: the test
+# chose 4, 8 and 32, the last with headroom, and the model keeps its own rule (redis.queue_partitions).
+# Compaction is held three ways: its requested vCPU covers the cores it used at p95, it runs no more than
+# 1.6x the workers that kept up, more than the workers that fell behind at 202.7k, and its autoscaler can
+# reach the about 20 the test's author estimated draining a backlog there needs (its guide's ceiling is 30).
+cases:
+  - name: 20k runs/s, payloads offloaded at 20 KB, 6 h expiry
+    inputs: {users: 1, traces_per_second: 980, peak_traces_per_second: 980, runs_per_trace: 20, single_run_kib: [64, 64], redis_expiry_seconds: 21600, postgres: external, redis: external, smithdb_metastore: external, object_store: external}
+    measured: {ingest_vcpu: 411, api_vcpu: 56, smithdb_ingestion_pods: 4, redis_shards: 10, compaction_workers_kept_up: 2, compaction_cores_p95: 11}
+  - name: 50k runs/s, payloads offloaded at 20 KB, 2 h expiry
+    inputs: {users: 1, traces_per_second: 2355, peak_traces_per_second: 2355, runs_per_trace: 20, single_run_kib: [64, 64], redis_expiry_seconds: 7200, postgres: external, redis: external, smithdb_metastore: external, object_store: external}
+    measured: {ingest_vcpu: 1050, api_vcpu: 130, smithdb_ingestion_pods: 8, redis_shards: 30, compaction_workers_kept_up: 2, compaction_cores_p95: 17}
+  - name: 115k runs/s, payloads in Redis, 2 min expiry
+    inputs: {users: 1, traces_per_second: 5730, peak_traces_per_second: 5730, runs_per_trace: 20, single_run_kib: [64, 64], offload_threshold_kib: 5120, redis_expiry_seconds: 120, postgres: external, redis: external, smithdb_metastore: external, object_store: external}
+    measured: {ingest_vcpu: 1820, api_vcpu: 466, smithdb_ingestion_pods: 20, redis_shards: 120, compaction_workers_kept_up: 3, compaction_cores_p95: 26}
+  - name: 202.7k runs/s, payloads in Redis, 2 min expiry
+    inputs: {users: 1, traces_per_second: 10135, peak_traces_per_second: 10135, runs_per_trace: 20, single_run_kib: [64, 64], offload_threshold_kib: 5120, redis_expiry_seconds: 120, postgres: external, redis: external, smithdb_metastore: external, object_store: external}
+    measured: {ingest_vcpu: 4235, api_vcpu: 1020, smithdb_ingestion_pods: 44, redis_shards: 240, compaction_workers_fell_behind: 5, compaction_workers_to_drain: 20}

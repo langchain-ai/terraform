@@ -1,0 +1,889 @@
+# The sizing model's own constants: every number no chart value, docs page or input gives.
+#
+# Each entry: value, unit, why (one line), source (kind and ref), by (who established it), since.
+# kind is one of: measurement (LangChain's payload and throughput measurements), load-test,
+# field (seen on installs, never named), lab (a reference cluster), derived (follows from other
+# values, said how), decision (a choice with its reason). A number the chart or the docs give is
+# never written here: it is read from the chart (chart.py) or cited (citations.yaml).
+#
+# First ported from LangChain PS's sizing calculator in Enterprise Hub (Dzmitry Dubarau, 2026-11) unless `by`
+# says otherwise.
+schema: 1
+params:
+  load.peak_factor:
+    value: 3
+    unit: x
+    chart_has_no_key: "a load assumption; the chart has no setting for the traffic it will see"
+    why: "The busiest minute over the average rate, when the person gives an average and not their busiest hour; Redis and ingest are sized on the peak, storage on the average."
+    source: {kind: field, ref: "peak-to-average ratios seen on self-hosted installs, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  load.runs_per_trace:
+    value: 10
+    unit: runs/trace
+    chart_has_no_key: "a load assumption; the chart has no setting for the traffic it will see"
+    why: "Runs in a typical trace when the person does not know theirs."
+    source: {kind: measurement, ref: "LangChain trace payload measurements, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  # Time
+  time.seconds_per_month:
+    value: 2626560
+    unit: s
+    chart_has_no_key: "a calendar convention, not a chart setting"
+    why: "Converts the traces a month people quote into the traces a second the model runs on; an average month of 30.4 days, one constant everywhere (not 30 x 86,400, not a year over 12, which differ by about 1%)."
+    source: {kind: derived, ref: "30.4 days x 86,400 s"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  time.seconds_per_year:
+    value: 31536000
+    unit: s
+    chart_has_no_key: "a calendar convention, not a chart setting"
+    why: "Converts a traces a second rate into a traces a year volume, to compare with the reference volume of the platform-backend measurement."
+    source: {kind: derived, ref: "365 days x 86,400 s"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  # The scale guide's grid
+  grid.blend:
+    value: {ll_mm: 0.5, ll_hl: 0.4, mm_hh: 0.5, hl_hh: 0.5}
+    unit: ratio
+    why: "Where each unpublished grid node starts between its two published neighbors before it is clamped between them; the ratios the earlier banded calculator used."
+    source: {kind: decision, ref: "carried from the banded calculator; clamped between published neighbors so a field never falls as load rises"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  # Input defaults and bounds
+  inputs.limits:
+    value:
+      field_kib: {min: 0.1, max: 25000}
+      threshold_kib: {min: 0, max: 25000}
+      runs_per_trace: {min: 1, max: 200}
+      peak_factor: {min: 1, max: 20}
+      compression: {min: 0.5, max: 10}
+    unit: per field (KiB, KiB, runs/trace, x, x)
+    why: "Bounds an input is clamped into so a typo cannot size a nonsense install; a field stops at 25 MB, the largest non-attachment field the ingest API accepts."
+    source: {kind: decision, ref: "bounds of the calculator's inputs; the 25 MB field is the ingest API's limit"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  defaults.blob_storage:
+    value: true
+    unit: flag
+    why: "Production installs offload large fields to a blob bucket; the model sizes the LangSmith bucket and keeps big payloads out of Redis only when it is on. The chart ships it off."
+    source: {kind: decision, ref: "the scale guide enables blob storage in every configuration but Low/Low"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+    chart_key: config.blobStorage.enabled
+  defaults.redis_expiry_tuned:
+    value: true
+    unit: flag
+    chart_has_no_key: "whether the person tuned the expiry is a fact about the install, not a chart value"
+    why: "Whether Redis runs with hz 50 and active-expire-effort 5; untuned expiry holds memory longer and stacks a headroom factor."
+    source: {kind: decision, ref: "the measurements were taken with the expiry tuned"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  defaults.compression:
+    value: 1.0
+    unit: x
+    chart_has_no_key: "a storage-model assumption; the chart does not compress anything the model sizes"
+    why: "Real-text compression factor; 1.0 is the measurements' coefficients, taken on synthetic payloads that compress well, so real text can need 2 to 5 times the storage."
+    source: {kind: measurement, ref: "LangChain trace payload measurements, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  # Payload anchors
+  payload.mix_default:
+    value: {small: 70, medium: 25, large: 5}
+    unit: "% of runs"
+    why: "Run-weighted blend of the three measured run sizes; shares that do not sum to 100 are normalized by their sum."
+    source: {kind: measurement, ref: "LangChain trace payload measurements, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  payload.bucket_kib:
+    value: {small: {in: 4, out: 4}, medium: {in: 32, out: 32}, large: {in: 750, out: 750}}
+    unit: KiB per field
+    why: "Input and output size of each measured run size; the large run was measured in the 1 to 2 MB range and 750 + 750 is a chosen midpoint."
+    source: {kind: decision, ref: "LangChain trace payload measurements, 2026-11; the large midpoint is chosen"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  payload.smithdb_kb_per_run:
+    value: {small: 3.75, medium: 15, large: 112}
+    unit: KB per run (decimal)
+    why: "Bytes a run costs in the SmithDB bucket at each measured run size, with the 20 KiB offload threshold."
+    source: {kind: load-test, ref: "LangChain load tests of LangSmith 0.17.6 with SmithDB, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  payload.blob_kb_per_run:
+    value: {small: 0, medium: 38, large: 84}
+    unit: KB per run (decimal)
+    why: "Bytes a run costs in the LangSmith bucket when its fields are offloaded; zero where nothing crosses the threshold."
+    source: {kind: load-test, ref: "LangChain load tests of LangSmith 0.17.6 with SmithDB, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  payload.redis_kb_per_run:
+    value: {small: 9.7, medium: 2.9, large: 12}
+    unit: KB per run (decimal)
+    why: "Bytes a run holds in Redis while it waits for ingest: the body when inline, a pointer when offloaded; the rise to the large run is unexplained. Through 0.17, or with ClickHouse on, a run keeps these bytes for the whole expiry (redis.payload_trimmed_from)."
+    source: {kind: load-test, ref: "LangChain load tests of LangSmith 0.17.6 with SmithDB, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  payload.partial_inline_share:
+    value: 0.5
+    unit: share of runs held in Redis
+    chart_has_no_key: "a payload-model coefficient measured by LangChain; the chart has no counterpart"
+    why: A run with one field offloaded and one inline counts as half in Redis for the shard count, which depends on how many runs keep their payload there.
+    source: {kind: decision, ref: "the calculator's reading of a partly offloaded run"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  payload.platform_backend_pods_at_reference:
+    value: {small: 3, medium: 6, large: 10}
+    unit: pods
+    why: "platform-backend pods the compute table gives at the reference volume for each run size; medium and large are estimates, not measurements."
+    source: {kind: measurement, ref: "LangChain trace payload measurements, 2026-11; medium and large estimated"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  payload.reference_traces_per_year:
+    value: 10000000000
+    unit: traces/year
+    chart_has_no_key: "the load the payload coefficients were measured at; not a chart setting"
+    why: "The volume the platform-backend pod counts were stated at; converted to pods per 1,000 peak runs a second."
+    source: {kind: measurement, ref: "LangChain trace payload measurements, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  payload.tested_traces_per_second:
+    value: 300
+    unit: traces/s
+    chart_has_no_key: "the highest load the payload coefficients were measured at; not a chart setting"
+    why: "The sustained rate the payload coefficients were measured at; a peak above it is beyond what was tested."
+    source: {kind: load-test, ref: "LangChain load tests of LangSmith 0.17.6 with SmithDB, 2026-11, about 300 traces/s sustained"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  # Retention and headroom
+  retention.extended_share_default_pct:
+    value: 5
+    unit: "% of runs"
+    chart_has_no_key: "a retention assumption; the chart's ttl settings give durations, not the share kept long"
+    why: "Share of runs upgraded to extended retention when the person does not say; the extended period itself is the chart's longlived TTL."
+    source: {kind: decision, ref: "default of the calculator"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  retention.smithdb_delete_lag_days:
+    value: 5
+    unit: days
+    chart_has_no_key: "how late SmithDB deletes after expiry; the chart sets the TTL, not the lag"
+    why: "SmithDB deletes expired data itself about this long after the TTL, so its bucket holds data that long past it; the LangSmith bucket has no lag."
+    source: {kind: measurement, ref: "LangChain measurements, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  headroom.storage:
+    value: 1.2
+    unit: x
+    chart_has_no_key: "a sizing margin of the model; the chart has none"
+    why: "Object-storage capacity above the steady-state bytes."
+    source: {kind: measurement, ref: "LangChain trace payload measurements, retention appendix, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  headroom.redis:
+    value: 1.3
+    unit: x
+    chart_has_no_key: "a sizing margin of the model; the chart has none"
+    why: "Redis maxmemory above the payload bytes; the measured tables need this, not the 1.43 of dividing by 0.7."
+    source: {kind: measurement, ref: "LangChain trace payload measurements, appendix A, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  headroom.redis_untuned_expiry:
+    value: 1.3
+    unit: x
+    chart_has_no_key: "a sizing margin of the model; the chart has none"
+    why: "Another factor on Redis memory when its expiry is not tuned (hz 50, active-expire-effort 5)."
+    source: {kind: measurement, ref: "LangChain trace payload measurements, appendix A, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  keda.max_factor:
+    value: 1.5
+    unit: x
+    chart_has_no_key: "how far above the peak pod count the model sets a ceiling; the chart's ceiling is a fixed default"
+    why: "KEDA's maxReplicaCount over the peak pod count, before rounding; reproduces the measurement tables, which print 25, 35, 80, 30."
+    source: {kind: decision, ref: "reproduces LangChain's measurement tables"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  keda.round_to:
+    value: 5
+    unit: replicas
+    chart_has_no_key: "how the model rounds a ceiling; the chart has no rounding"
+    why: "KEDA's ceiling is rounded to the nearest multiple of this; rounding up breaks the reproduction of the tables."
+    source: {kind: decision, ref: "reproduces LangChain's measurement tables"}
+    by: Dzmitry Dubarau
+    since: 2026-11-12
+  # Ingest queue and Go pods
+  ingest.runs_per_core_points:
+    value: [[8, 55], [190, 12.6]]
+    unit: "[KB per run, runs/s per core]"
+    why: "Runs a second one ingest-queue core sustains at a small and at a large run, held flat outside them; the curve between is interpolated, not measured."
+    source: {kind: field, ref: "55 runs/s per core at small payloads seen on a self-hosted install at 115,000 runs/s; 12.6 at about 190 KB in a LangChain lab, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  ingest.cpu_headroom:
+    value: 1.25
+    unit: x
+    chart_has_no_key: "a sizing margin of the model; the chart has none"
+    why: "ingest-queue CPUs above runs a second over runs a core."
+    source: {kind: field, ref: "LangChain field cases, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  ingest.pod_cpu:
+    value: 2
+    unit: vCPU
+    why: "ingest-queue pods run at requests equal to limits of 2 vCPU, which Go needs for two threads, where the chart requests 1."
+    source: {kind: lab, ref: "a LangChain lab: three 2-CPU pods held lag p95 under 3 s where one 1-CPU pod ran 277 s, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+    chart_key: ingestQueue.deployment.resources.requests.cpu
+  ingest.pod_memory_gib:
+    value: 4
+    unit: GiB
+    why: "ingest-queue memory request and limit, advised for I/O-heavy workers; the chart requests 2."
+    source: {kind: field, ref: "LangChain field cases, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+    chart_key: ingestQueue.deployment.resources.requests.memory
+  ingest.min_pods:
+    value: 2
+    unit: pods
+    chart_has_no_key: "two so one survives a restart; the chart's replica count is a different figure and is read separately"
+    why: "At least two ingest-queue pods so one survives a restart."
+    source: {kind: decision, ref: "one pod survives a restart"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  go.min_cpu_limit:
+    value: 2
+    unit: vCPU
+    chart_has_no_key: "Go's thread rule, not a chart setting; the chart's limit is raised to it where lower"
+    why: "A Go pod's thread count follows its CPU limit with a minimum of 2; at a 1-CPU limit two threads spend the quota in half the window and the pod freezes for the rest, so a limit below this lags."
+    source: {kind: lab, ref: "98% of windows throttled at a 1-CPU limit in a LangChain lab, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  availability.min_replicas:
+    value: 2
+    unit: replicas
+    chart_has_no_key: "what surviving a node's loss needs; the chart's replica counts are not that rule"
+    why: "When the install must survive a node loss, every workload the plan lists runs at least this many, so one can be lost without an outage."
+    source: {kind: decision, ref: "the model's own two-pod rule for ingest-queue and SmithDB query, applied to every workload"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  # Redis
+  redis.alarm_pct:
+    value: 70
+    unit: "% of maxmemory"
+    chart_has_no_key: "an alarm level the model recommends; the chart sets none"
+    why: "With noeviction, alarm here: a refused write is retried by the SDK while an eviction loses the run silently. Steady state sits near 77% at 1.3 headroom, so on a fully loaded instance the alarm fires by design, as the signal to add memory before a backlog starts."
+    source: {kind: field, ref: "LangChain field cases, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  redis.runs_per_shard:
+    value: {inline: 850, offloaded: 1700}
+    unit: runs/s per shard
+    why: "Redis is single-threaded at 25 to 30 commands a run, so shards follow the run rate, with payloads in Redis or as pointers."
+    source: {kind: load-test, ref: "a LangChain load test ran 240 shards at 200,000 runs/s, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  redis.cluster_shard_cap:
+    value: 250
+    unit: shards
+    chart_has_no_key: "a managed-service limit, not a chart setting"
+    why: "A managed Redis cluster caps near this many shards; past it the queue needs partitions and a measured load test."
+    source: {kind: decision, ref: "managed Redis cluster limit"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  redis.single_node_max_gb:
+    value: 300
+    unit: GB
+    chart_has_no_key: "a managed-service limit, not a chart setting"
+    why: "The memory one managed Redis node holds at most; the smallest such ceiling among the clouds (Memorystore Standard), above which Redis must be a cluster."
+    source: {kind: decision, ref: "the public Memorystore Standard limit, the smallest single-node ceiling of the managed services"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  redis.expiry_retry_hours:
+    value: 3.5
+    unit: hours
+    chart_has_no_key: "how long a backlog may wait inside the expiry; the chart has no such setting"
+    why: "Feedback retries that must fit inside the Redis expiry after the worst ingest backlog; the 6 h chart default therefore holds only while the backlog stays under 2.5 h."
+    source: {kind: field, ref: "installs lost runs with a 1 h expiry and a backlog over 1 h, LangChain field cases, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  redis.payload_trimmed_from:
+    value: "0.18"
+    unit: chart line
+    chart_has_no_key: "the release that changed what Redis keeps; a fact about the application, not a setting"
+    why: "From this chart line, with ClickHouse off, ingest deletes a run's payload from Redis once the run is stored and keeps only a small record until the expiry, for late feedback (LangSmith's ingest worker, from 0.18). Redis then holds the record for the expiry and payloads only while a backlog waits."
+    source: {kind: field, ref: "LangChain's ingestion team, 2026-11; LangSmith 0.18's ingest worker"}
+    by: Reed Bender
+    since: 2026-11-27
+  redis.trimmed_kb_per_run:
+    value: 2.5
+    unit: KB per run (decimal)
+    chart_has_no_key: "what the application keeps; the chart has no counterpart"
+    why: "What a stored run keeps in Redis for the expiry once its payload is trimmed (redis.payload_trimmed_from): the same whatever the payload, 1.56 to 1.73 KiB a run at 34 to 97 KiB payloads on one machine, about 2.5 KB in LangChain's load test at 20,000 to 200,000 runs a second. The larger of the two."
+    source: {kind: load-test, ref: "LangSmith Lite on magus, 2026-11-26: Redis used_memory over runs stored, 28 ten-minute steps of simple and agent traces, chart 0.18.5; LangChain's load test at 20,000 to 200,000 runs/s, 2026-11"}
+    by: Reed Bender
+    since: 2026-11-27
+  redis.stall_hours:
+    value: 1
+    unit: hours
+    chart_has_no_key: "how long a stalled ingest Redis must hold at the peak; the chart has no such setting"
+    why: "Once payloads are trimmed, Redis holds them only while ingest is behind: this many hours of the peak rate's payloads (payload.redis_kb_per_run) buffer a stalled ingest before Redis fills. A drain measured under two minutes on one machine; an hour covers a SmithDB restart or an object store outage with room to spare, and the expiry still bounds a longer stall."
+    source: {kind: decision, ref: "Reed Bender, 2026-11-27, from LangSmith Lite's experiments on magus (oldest queued task at most 59 s) and the 6 h chart expiry"}
+    by: Reed Bender
+    since: 2026-11-27
+  redis.queue_partitions:
+    value: {runs_per_partition: 12000, min_on_cluster: 2}
+    unit: runs/s per partition
+    why: "asynq keeps one queue on one shard, so on a cluster the ingestion queue is partitioned; the reference is 4 partitions at 50,000 runs/s, 8 at 115,000, 32 at 200,000."
+    source: {kind: field, ref: "partition counts seen on self-hosted installs, LangChain field cases, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  # Postgres
+  postgres.pool_api_pod:
+    value: 50
+    unit: connections per pod
+    chart_has_no_key: "connections an API pod opens, measured; the chart sets no pool for it"
+    why: "Connections a platform-backend or backend pod opens; queue pods open the chart's own pool size."
+    source: {kind: measurement, ref: "LangChain measurements, 2026-11: 265 connections at the chart's replica counts"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  postgres.connection_budget:
+    value: 0.8
+    unit: share of max_connections
+    chart_has_no_key: "a share of max_connections the model leaves for the pods; not a chart setting"
+    why: "Connections the pods may use before Postgres is called short."
+    source: {kind: decision, ref: "leaves room for migrations and operators"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  postgres.max_connections_in_cluster:
+    value: 100
+    unit: connections
+    chart_has_no_key: "the image's default max_connections; the chart does not set it"
+    why: "max_connections of the in-cluster Postgres, which runs the image's default."
+    source: {kind: decision, ref: "the PostgreSQL image default"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  postgres.bytes_per_connection:
+    value: 9531392
+    unit: bytes
+    chart_has_no_key: "how max_connections follows instance memory on a managed Postgres; not a chart setting"
+    why: "The RDS default parameter-group formula, instance memory over this, stands in for every cloud's max_connections; Cloud SQL and Azure set their own by tier."
+    source: {kind: derived, ref: "AWS RDS default max_connections = LEAST(memory / 9531392, 5000)"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  postgres.max_connections_cap:
+    value: 5000
+    unit: connections
+    chart_has_no_key: "a managed-service limit, not a chart setting"
+    why: "The cap of the RDS default parameter-group formula."
+    source: {kind: derived, ref: "AWS RDS default max_connections = LEAST(memory / 9531392, 5000)"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  # SmithDB
+  smithdb.peak_runs_bands:
+    value: {small: 100, medium: 1000, large: 10000}
+    unit: peak runs/s
+    why: "The peak write rate below which each tier holds; the Helm tiers are rated in batched ingest QPS (about 10, 100, 1,000) and every measured limit is in runs a second. Past the last edge the install is beyond the tiers: queue, Redis CPU and Postgres connections bind."
+    source: {kind: field, ref: "LangChain field cases, 2026-11: installs near 2,000 peak runs/s hit Redis memory and query OOMs; past 10,000 the queue, Redis CPU and Postgres connections bind"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  smithdb.small_ingestion_runs_per_pod:
+    value: 86
+    unit: peak runs/s a pod
+    chart_has_no_key: "a measured capacity, not a chart setting"
+    why: "What one small-tier ingestion pod (4 vCPU, 8 GiB) carries. It is memory bound: pods held 86 to 133 runs/s and were OOM-killed from 113 runs/s with the metastore outside the cluster, so the lowest held below the lowest killed is the figure. A low regime scales small ingestion pods out to the peak instead of moving to the medium tier, whose query pods alone are 56 vCPU; at or below one pod's figure, a chart with smithdb.topology runs SmithDB as its single unified pod."
+    source: {kind: lab, ref: "bare-metal lab, Hari Narayan's load tool at 3 runs a trace and about 540 KiB a trace, five ten-minute runs (87213169dc, cf04bae181, b8f26f7c53, 8ef04a4f71, 056f0043df)"}
+    by: Reed Bender
+    since: 2026-11-17
+  smithdb.query_floor_replicas:
+    value: 2
+    unit: replicas
+    why: "smithdb-query replicas from the second tier up: eight query pods meant eight cold caches and repeated searches never got faster, and two keep one serving through a rollout on local-SSD nodes that cannot surge."
+    source: {kind: field, ref: "LangChain advised 1 to 2 query pods, LangChain field cases, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+    chart_key: smithdb.query.deployment.replicas
+  smithdb.mutations_replicas:
+    value: 2
+    unit: replicas
+    why: "The dedicated mutations service starts at two: with it off, feedback writes ran on the query pods and failed with them."
+    source: {kind: field, ref: "LangChain field cases, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+    chart_key: smithdb.mutations.deployment.replicas
+  smithdb.splits_from_tier:
+    value: large
+    unit: tier
+    chart_has_no_key: "the tier from which the model turns the dedicated services on; the chart's switches are read separately"
+    why: "From this tier up the dedicated stats-query and mutations services run: stats over large projects saturated and OOM-killed shared query pods. At the tier below they are recommended, not counted."
+    source: {kind: field, ref: "LangChain field cases, 2026-11"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  # ClickHouse, deprecated
+  clickhouse.inline_payload_factor:
+    value: 5
+    unit: x
+    chart_has_no_key: "how much more disk inline payloads take; the chart does not size disk from load"
+    why: "Disk with payloads inline (blob storage off) over the guide's blob-on figure, which already assumes blob storage; the inverse of an assumed 20% share that references and search tokens take."
+    source: {kind: decision, ref: "an assumption: no LangChain doc publishes a blob-off figure"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  clickhouse.floor_gi_per_day:
+    value: 5
+    unit: GiB per TTL day
+    chart_has_no_key: "a floor under the guide's disk curve; not a chart setting"
+    why: "Disk a TTL day at or below 20 traces/s, where the guide publishes no figure."
+    source: {kind: decision, ref: "an assumption: the guide gives 60 and 600 GiB a day at 100 and 1,000 traces/s only"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  clickhouse.floor_up_to_traces_per_second:
+    value: 20
+    unit: traces/s
+    chart_has_no_key: "where that floor stops applying; not a chart setting"
+    why: "The rate up to which the floor above applies."
+    source: {kind: decision, ref: "an assumption: the guide gives 60 and 600 GiB a day at 100 and 1,000 traces/s only"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  # The load a test sends: the same load the plan sizes, as a load profile (profile.py)
+  load.feedback_per_trace:
+    value: 0.5
+    unit: feedback writes per trace
+    chart_has_no_key: "a load assumption; the chart has no setting for the traffic it will see"
+    why: "Feedback a trace receives when the person does not say; feedback is written through the same ingest path as runs, so a test without it under-loads the queue."
+    source: {kind: decision, ref: "the load test's default share since its first release (utils/langsmith-load-test, 2026-09)"}
+    by: Hari Narayan
+    since: 2026-09-24
+  load.payload_shape:
+    value: {traces: simple, fields_per_side: 1, content: text, send: post_then_patch, projects: 1, project_skew: 1.0, metadata_keys: 0, batch_runs: 100}
+    unit: "simple (runs_per_trace runs in a flat tree, each a size from the mix) or agent (load.agent_trace); fields an input and an output each split into; text, json or base64; post_then_patch or post_once; projects and the Zipf exponent of their spread; metadata keys a run; the most runs a request"
+    chart_has_no_key: "how a test shapes the bytes it sends; the chart has no setting for the traffic it will see"
+    why: "The ingest cost a core carries depends on more than a run's size: offload to the bucket is decided per field, prose, JSON and base64 compress differently, a run sent as a create then an update is two requests where a finished run is one, one project concentrates its runs on the same SmithDB ingestion pods, metadata is indexed, and fewer runs a request means more requests and more object-store writes (40 runs a request rate-limited S3 at 200,000 runs/s where 100 did not, in LangChain's v18 load test). A test that varies one of these against the default measures what it costs; every run sent with these defaults is comparable with the last."
+    source: {kind: decision, ref: "the shape the load test sent before it could vary any of them: one input and one output field of prose, each run created then updated, into one project, with no metadata of its own and the SDK's 100 runs a request (utils/langsmith-load-test, 2026-09)"}
+    by: Reed Bender
+    since: 2026-11-18
+  load.agent_trace:
+    value:
+      agentic_share: 0.3
+      tool_turns: 3.0
+      tools_per_turn: [0.85, 0.1, 0.05]
+      wrappers: 1.0
+      history_messages: 6.0
+      system_kib: {median: 6.0, sigma: 0.6}
+      user_kib: {median: 0.2, sigma: 1.0}
+      history_kib: {median: 1.0, sigma: 1.2}
+      arguments_kib: {median: 0.1, sigma: 0.6}
+      result_kib: {median: 3.0, sigma: 1.6, max: 2048}
+      call_kib: {median: 0.1, sigma: 0.6}
+      answer_kib: {median: 0.4, sigma: 0.9}
+    unit: "agentic_share: the share of traces that call tools; tool_turns: the mean model calls past the first in such a trace (1 plus a geometric count); tools_per_turn: the weights of 1, 2 and 3 calls a turn; wrappers and history_messages: geometric means; *_kib: lognormal sizes (median KiB, the sigma of the log, an optional max)"
+    chart_has_no_key: "how a test shapes the traces it sends; the chart has no setting for the traffic it will see"
+    why: "An application's trace for --traces agent: a root holding the new message and the answer, a model node a turn with its wrapper chains and its chat-model call, and a tools node with a tool run a call for every turn that calls one. Every model call and its wrappers carry the conversation so far, so a large tool result or a long thread is sent again by every later run. Calibrated on 20,000 planned traces to what customers send: runs a trace median 4, mean 10.2, p99 69 (LangSmith's own trace data: median 3 to 4, mean 9 to 11, p99 73 to 95); model calls a trace mean 2.2, median 1 (2.0 to 2.6, median 1); a run's inputs and outputs median 16.8 KiB, p95 148, mean 40 (a customer's week of production runs: median about 16 KB, p95 about 180, mean about 42); non-root chains 68% of the bytes and model calls 28% (that week: 71% and 28%)."
+    source: {kind: decision, ref: "calibrated to LangSmith's sampled trace data (December 2025 to March 2026) and one customer's week of production runs (November 2026), LangChain-internal measurements (utils/langsmith-load-test, payloads/agent.py, 2026-11-26)"}
+    by: Reed Bender
+    since: 2026-11-26
+  load.coding_trace:
+    value:
+      agentic_share: 1.0
+      tool_turns: 5.7
+      tools_per_turn: [0.3, 0.3, 0.4]
+      wrappers: 160.0
+      history_messages: 0.0
+      system_kib: {median: 16.0, sigma: 0.2}
+      user_kib: {median: 160.0, sigma: 1.55, max: 18000}
+      history_kib: {median: 1.0, sigma: 1.0}
+      arguments_kib: {median: 0.3, sigma: 1.2, max: 64}
+      result_kib: {median: 3.3, sigma: 1.5, max: 17000}
+      call_kib: {median: 1.0, sigma: 0.8}
+      answer_kib: {median: 2.0, sigma: 0.8}
+      wrapper_kib: {median: 0.04, sigma: 1.0}
+      context_kib: 4000.0
+      summary_kib: 40.0
+    unit: "load.agent_trace's keys, plus wrapper_kib: a middleware run's own payload (its wrappers then carry no conversation), context_kib: the context at which the agent compacts it, and summary_kib: the summary that replaces it"
+    chart_has_no_key: "how a test shapes the traces it sends; the chart has no setting for the traffic it will see"
+    why: "A coding agent's trace for --traces coding. Calibrated to LangChain's production coding agent over 5.8 days (44.6M runs, 34,300 traces): runs a trace median 803, p95 4,462, p99 8,481, max 109,623, mean 1,300; 98.4% of runs framework chains, 0.5% model calls (6.7 a trace), 1.1% tool calls (14 a trace); a model call's input median 300 KB, p95 2.6 MB, p99 5.8 MB, max 19 MB, 99.4% of its bytes; a tool's output median 3.3 KB, p95 42 KB, p99 127 KB; metadata keys a run median 23, p95 86. Its traces are heavy per model call and per trace, not per run: about 13 KB a run across all runs (a lower bound: most chain sizes are not exported). The same export for LangChain's deepagents coding agent (174 traces) agreed on model calls (median 295 KB, p99 4.2 MB) with shorter traces (median 43 runs) and 65 metadata keys."
+    source: {kind: measurement, ref: "LangChain's SmithDB runs export (BigQuery), its production coding agents, 2026-11-21 to 2026-11-26, measured by Robin for Reed Bender on 2026-11-28; messages a model call, attachments and the overlap of resent context are not in the export"}
+    by: Reed Bender
+    since: 2026-11-28
+  load.read_mix:
+    value:
+      list_traces: {weight: 45, component: query, what: "the most recent root runs in a project"}
+      read_trace: {weight: 30, component: query, what: "one trace with its child runs"}
+      project_stats: {weight: 15, component: stats-query, what: "a project's run statistics over its default window"}
+      feedback_stats: {weight: 8, component: stats-query, what: "feedback statistics for a project"}
+      heavy_filter: {weight: 2, component: query, what: "a metadata or full-text filter over the heavy window"}
+    unit: relative weight per read
+    why: "How the read rate the scale guide ties to users splits across what a viewer does; the heavy filter is a small, explicit share because one such query took query pods past their memory limit at low CPU on a large install, and a test that never sends it passes installs that will fail."
+    source: {kind: decision, ref: "the read shapes behind query and stats-query incidents on large self-hosted installs, 2026-11"}
+    by: Reed Bender
+    since: 2026-11-17
+  load.heavy_window_days:
+    value: 30
+    unit: days
+    chart_has_no_key: "a read-load assumption; the chart has no setting for the traffic it will see"
+    why: "The time window the heavy filter reads across: the window over which a filter broke query pods on a large install."
+    source: {kind: field, ref: "LangChain field cases, 2026-11"}
+    by: Reed Bender
+    since: 2026-11-17
+  slo.stored_within_seconds:
+    value: {p99: 30}
+    unit: s from send to readable
+    why: "A run sent is readable within this time for 99% of runs; the target set for large self-hosted installs."
+    source: {kind: field, ref: "SLOs proposed for large self-hosted installs, 2026-11-13"}
+    by: Ben Nagengast
+    since: 2026-11-13
+  slo.trace_load_seconds:
+    value: {p99: 5}
+    unit: s
+    why: "Loading a trace returns within this time for 99% of reads; the target set for large self-hosted installs."
+    source: {kind: field, ref: "SLOs proposed for large self-hosted installs, 2026-11-13"}
+    by: Ben Nagengast
+    since: 2026-11-13
+  # Regimes, autoscaling, configuration and watching: the healthy-install half of the plan
+  regimes:
+    value:
+      - id: beyond-tested
+        peak_runs_per_second_above: 202700
+        about: "Peak past the highest rate a load test held (202,700 runs/s): everything scale-out turns on, plus a warning, because no load test covers it. One managed Redis cluster caps near 250 shards and the payloads must stay in Redis. Object-store request rate becomes a limit, and payloads stay in Redis rather than offloaded once offload is throttled."
+        turns_on: {autoscalers: true, splits: true, redis_cluster: true, queue_partitions: true, separate_node_pools: true, ceilings_above_chart_default: true, scale_out: true, warn_beyond_tested: true, watch_object_store_request_rate: true, payloads_in_redis_when_offload_throttled: true}
+      - id: scale-out
+        peak_band_min: large
+        about: "Peak from the large SmithDB band's top up to the 202,700 runs/s a load test held: the docs' tiers stop, so ingest-queue, the API, SmithDB ingestion and compaction scale with the run rate at the rates that test measured (params scale_out.measured), the queue gets the partitions it ran, and the plan says what bound it: Postgres connections, the object store's request rate, one project's memory on an ingestion pod."
+        turns_on: {autoscalers: true, splits: true, redis_cluster: true, queue_partitions: true, separate_node_pools: true, ceilings_above_chart_default: true, scale_out: true, watch_object_store_request_rate: true, payloads_in_redis_when_offload_throttled: true}
+      - id: large
+        peak_band_min: medium
+        about: "Peak in the large SmithDB band: dedicated stats-query and mutations, a Redis cluster with queue partitions, separate node pools, autoscaler ceilings above the chart's."
+        turns_on: {autoscalers: true, splits: true, redis_cluster: true, queue_partitions: true, separate_node_pools: true, ceilings_above_chart_default: true}
+      - id: extra-lite
+        peak_traces_per_second_max: 5
+        requires: {survives_node_loss: false}
+        about: "A few traces a second, tracing only: ClickHouse off, every serving pod at one replica, autoscalers off, the stores in the cluster on one node, short retention, SmithDB small, and unified (one pod) where the chart has smithdb.topology and one pod carries the load. Helm's hook Jobs run beside the pods and set the peak on a small node."
+        turns_on: {autoscalers: false, serving_replicas: 1, clickhouse: false, smithdb_tier: small, smithdb_unified: true, stores_in_cluster: true, one_node: true, short_retention: true, tracing_only: true, hook_jobs_set_node_peak: true, requests_from_measured: true}
+      - id: lite
+        peak_traces_per_second_max: 15
+        unmeasured: true
+        about: "Up to about 15 traces a second on two nodes with the smallest managed stores. SmithDB stays small and scales its ingestion and query pods out to the load; it runs unified (one pod) where the chart has smithdb.topology and one pod carries the load. Not measured: treat every figure as observe until a run reads it."
+        turns_on: {autoscalers: true, nodes: 2, smallest_managed_stores: true, smithdb_tier: small, smithdb_unified: true}
+      - id: standard
+        about: "Between lite and the large band: the scale guide's configurations, autoscalers on, the dedicated SmithDB services only where the tier asks for them."
+        turns_on: {autoscalers: true}
+    unit: "regime bands, first match wins: peak_runs_per_second_above (peak runs/s strictly above), peak_band_min (peak runs/s at or above that SmithDB band's upper edge), peak_traces_per_second_max (the busiest rate at or below; the low regimes' figures are busiest rates), requires (input facts that must hold: one replica cannot survive a node's loss)"
+    why: "Which regime an install is in decides what to switch on, so each is data: a band by the model's own SmithDB edges (smithdb.peak_runs_bands) or by average traces/s, and the switches it turns on. Large and beyond-tested are tested first because a few traces a second with huge traces is still a large write rate. Where the scale guide's Medium (up to 100 traces/s) and the SmithDB large band overlap, the larger regime wins."
+    source: {kind: decision, ref: "2026-11-16 internal sizing discussion; the beyond-tested figures are a LangChain load test at 200,000 runs/s that needed about 240 Redis shards, 32 partitions, about 600 ingest workers, 44 SmithDB ingestion pods and about 510 API pods"}
+    by: Reed Bender
+    since: 2026-11-17
+  scale.signals:
+    value:
+      cpu: {field: targetCPUUtilizationPercentage, ask: null}
+      memory: {field: targetMemoryUtilizationPercentage, ask: "scale on memory utilization"}
+      run_backlog: {field: queueTargetSize, ask: null}
+      queue_backlog: {field: queueTargetSize, ask: null}
+      compaction_jobs: {field: pendingJobsThreshold, ask: null}
+      admission_queue: {field: null, ask: "scale on the SmithDB admission queue length (query_admission_queue_length), a trigger field the autoscaling block does not have"}
+      pending_segments: {field: null, ask: "scale on pending ingest segments (ingest_pending_segment_entry_count), a trigger field the autoscaling block does not have"}
+      backlog: {field: null, ask: "scale on the service's own backlog, a trigger field the autoscaling block does not have"}
+    unit: "signal -> the autoscaling field that expresses it (null: none does)"
+    why: "A signal is something an autoscaler can watch; the chart expresses it when the workload's autoscaling block has the field. CPU and memory are the targets of every hpa and keda block that has them; a backlog is KEDA's queueTargetSize or pendingJobsThreshold; the SmithDB admission queue, pending segments and per-service backlogs have no field in either chart version."
+    source: {kind: decision, ref: "read from the chart's autoscaling blocks at 0.17.35, 0.17.56 and 0.18.0-rc.57; SmithDB metric names are in watch.metrics_smithdb"}
+    by: Reed Bender
+    since: 2026-11-17
+  scale.fallback:
+    value: {mechanism: hpa, signal: cpu}
+    unit: mechanism and signal
+    why: "Where the chart cannot express the recommended trigger the plan scales on CPU with its own floors and ceilings, so a workload is never left without an autoscaler for want of a better signal."
+    source: {kind: decision, ref: "field cases where a CPU autoscaler pinned at its floor did not save OOM-killed query pods; the fallback is the least bad, and the gap is recorded as a chart ask"}
+    by: Reed Bender
+    since: 2026-11-17
+  scale.workloads:
+    value:
+      frontend: {values_key: frontend, sized_as: workloads.frontend, mechanism: hpa, signals: [cpu], why: "Stateless and CPU-bound; floors from the scale guide."}
+      backend: {values_key: backend, sized_as: workloads.backend, mechanism: hpa, signals: [cpu], why: "Stateless and CPU-bound; floors from the scale guide."}
+      platform-backend: {values_key: platformBackend, sized_as: workloads.platform-backend, mechanism: hpa, signals: [cpu], why: "A Go service whose work follows CPU, with a CPU limit of at least go.min_cpu_limit so CPU stays a usable signal."}
+      ingest-queue: {values_key: ingestQueue, sized_as: workloads.ingest-queue, mechanism: keda, signals: [run_backlog], chart_limit: "the KEDA scaler also fires on the feedback and adhoc backlogs against the same queueTargetSize, so a feedback flood can still scale it; ask a switch to scale on the run backlog alone (GO_FEEDBACK_QUEUE_PRIORITY keeps runs ahead of feedback meanwhile)", why: "Run backlog is the work waiting; CPU lags it, and a feedback flood must not drive ingest."}
+      queue: {values_key: queue, sized_as: workloads.queue, mechanism: keda, signals: [queue_backlog], why: "The Python queue worker's work is its backlog."}
+      smithdb-query: {values_key: smithdb.query, sized_as: smithdb.components.query, topology: cluster, mechanism: hpa, signals: [admission_queue], why: "Query pods were OOM-killed at about 7% CPU with a CPU autoscaler pinned at its floor; queued work shows load that CPU does not. No replica count saves one huge query, so per-operation memory limits are configured too (configure)."}
+      smithdb-stats-query: {values_key: smithdb.statsQuery, sized_as: smithdb.components.stats-query, topology: cluster, mechanism: hpa, signals: [admission_queue], why: "One large stats query saturated CPU and runtime threads in a dev test; queued work is the signal, per-operation memory limits the guard."}
+      smithdb-mutations: {values_key: smithdb.mutations, sized_as: smithdb.components.mutations, topology: cluster, mechanism: hpa, signals: [backlog], why: "Feedback writes are queued work; CPU follows it late."}
+      smithdb-run-rules: {values_key: smithdb.runRules, sized_as: smithdb.components.run-rules, topology: cluster, mechanism: hpa, signals: [backlog], why: "Rule evaluations are queued work; the model does not size this service, the chart leaves it off."}
+      smithdb-ingestion: {values_key: smithdb.ingestion, sized_as: smithdb.components.ingestion, topology: cluster, mechanism: hpa, signals: [memory, pending_segments], why: "Ingestion holds segments in memory until flushed; memory and pending segments show a falling-behind flush that CPU hides."}
+      smithdb-compaction-worker: {values_key: smithdb.compactionWorker, sized_as: smithdb.components.compaction-worker, topology: cluster, mechanism: keda, signals: [compaction_jobs], why: "Pending compaction jobs are the work waiting."}
+      smithdb: {values_key: smithdb.unified, sized_as: smithdb.components.smithdb, topology: unified, mechanism: none, signals: [], why: "The unified topology is one pod sized by the tier; the chart gives it no autoscaler."}
+    unit: "workload -> chart values key, where the plan sizes it, recommended mechanism and signals"
+    why: "The recommended trigger per workload, as data, so the plan can say what the chart supports and what it lacks. Not every workload is listed: playground and ace-backend stay fixed at the chart's counts."
+    source: {kind: decision, ref: "field cases where query pods were OOM-killed at about 7% CPU with a CPU autoscaler pinned at its floor, and a dev test where one large stats query saturated CPU and runtime threads, 2026-11"}
+    by: Reed Bender
+    since: 2026-11-17
+  configure.queue_priorities:
+    value: {GO_INGESTION_QUEUE_PRIORITY: 6, GO_FEEDBACK_QUEUE_PRIORITY: 1}
+    unit: asynq queue weight (higher runs first)
+    why: "Runs run before feedback, so a feedback flood cannot starve ingest; no chart key sets these, so they go in commonEnv."
+    source: {kind: decision, ref: "LangChain field cases, 2026-11"}
+    by: Reed Bender
+    since: 2026-11-17
+  configure.partition_env:
+    value: [GO_INGESTION_WORKER_PARTITIONS, GO_INGESTION_QUEUE_PARTITIONS]
+    unit: environment variable names
+    why: "Partitions spread the ingestion queue's keys over Redis Cluster slots; on one Redis node they add nothing, so they are set only when the plan's Redis is a cluster, to redis.queue_partitions (a default of 4 for clusters was proposed by Quentin Brosse, 2026-11-10; the model keeps its count from the peak run rate). No chart key sets them, so they go in commonEnv."
+    source: {kind: decision, ref: "LangChain field cases, 2026-11; partition counts in redis.queue_partitions"}
+    by: Reed Bender
+    since: 2026-11-17
+  watch.metrics_smithdb:
+    value:
+      critical: [ingest_pending_segment_entry_count, ingest_flush_rows, compaction_queue_job_count, compaction_queue_oldest_pending_created_at_seconds, compaction_jobs_executed, compaction_worker_capacity_used, object_store_op_duration, query_admission_queue_length, query_fanout_limit_exceeded_total]
+      all_only: [ingest_flush_vortex_duration, metastore_batch_flush_duration, query_execution_vortex_cache_bytes, query_execution_object_store_bytes, query_read_amplification]
+    unit: metric names, by export mode
+    why: "The SmithDB metrics a watch item reads, split by whether a pod exports them at the chart's default. The chart sets every SmithDB pod's <SERVICE>__METRICS__MODE to critical, which exports a fixed list of families; an all_only metric is served only after that variable is set to all, so a watch item reading one says so in `needs`. A family also appears only once its pod has observed it: an idle ingestion pod serves none of the ingest_* families."
+    source: {kind: lab, ref: "exposed at /metrics by the smithdb image 0.17.62 and 0.18.20rc1; the critical list is SmithDB's critical export list at the source image 0.17.62 is built from, and every SmithDB pod on the bare-metal lab (chart 0.17.35) ran METRICS__MODE=critical, read 2026-11-18"}
+    by: Reed Bender
+    since: 2026-11-18
+  watch.metrics_other:
+    value: [ingestion_queue.pending, feedback_queue.pending, langsmith_asynq_queue_latency_seconds, "log:Skipping run as it has expired", "log:Index construction failed", used_memory, maxmemory, evicted_keys, connected_clients, pg_stat_activity, kube_horizontalpodautoscaler_status_current_replicas, kube_pod_container_status_last_terminated_reason, container_cpu_cfs_throttled_periods_total, container_cpu_cfs_periods_total]
+    unit: metric names
+    why: "LangSmith's queue depths (the ones the chart's KEDA scalers read) and the age of its oldest queued task, the line ingest-queue logs when it drops an expired run, Redis INFO fields, Postgres's connections in use, and the Kubernetes series that show an autoscaler at its ceiling, a pod killed for memory and a CPU limit throttling."
+    source: {kind: lab, ref: "platform-backend /metrics?format=json as the chart's KEDA scalers read it, Redis INFO, kube-state-metrics and cAdvisor series"}
+    by: Reed Bender
+    since: 2026-11-17
+  watch.items:
+    value:
+      - {id: redis-memory, workload: redis, metric: used_memory, where: "Redis INFO memory: used_memory over maxmemory", threshold: {from: "param:redis.alarm_pct", unit: "% of maxmemory"}, meaning: "With noeviction a full Redis refuses writes; the SDK retries them, a backlog starts.", action: "Add Redis memory before the backlog; never lower the run expiry to save it."}
+      - {id: redis-evictions, workload: redis, metric: evicted_keys, where: "Redis INFO stats: evicted_keys", threshold: {value: 0, unit: "evicted keys, any"}, meaning: "An eviction loses a run silently.", action: "Set maxmemory-policy noeviction (configure.redis) and add memory."}
+      - {id: redis-clients, workload: redis, metric: connected_clients, where: "Redis INFO clients: connected_clients", threshold: null, meaning: "Every pod holds Redis connections; a managed cluster refuses new ones near its limit (64,000 on a GCP Memorystore cluster, where LangChain's load test set its stop at 55,000).", action: "Fewer, larger pods, or a Redis with a higher client limit."}
+      - {id: postgres-connections, workload: postgres, metric: pg_stat_activity, where: "Postgres: rows in pg_stat_activity against max_connections", threshold: null, meaning: "About one connection a pod is in use at scale; a default of about 800 ran out near 730 pods in LangChain's load test.", action: "Raise max_connections to the plan's (stores.postgres) and put PgBouncer in front."}
+      - {id: run-backlog-at-ceiling, workload: ingest-queue, metric: ingestion_queue.pending, where: "platform-backend /metrics?format=json, ingestion_queue.pending", threshold: {from: "chart:ingestQueue.autoscaling.keda.queueTargetSize", unit: pending runs}, while: {from: "plan:scale.ingest-queue.applied.max", unit: "replicas, ingest-queue at its ceiling"}, meaning: "Backlog stays above the autoscaler's target while it cannot add pods: ingest cannot keep up.", action: "Raise the ceiling, then the pod CPU; if Redis memory also climbs, the install is past its sizing."}
+      - {id: feedback-backlog, workload: ingest-queue, metric: feedback_queue.pending, where: "platform-backend /metrics?format=json, feedback_queue.pending", threshold: null, meaning: "Feedback backs up while runs are still pending: feedback writes compete with runs.", action: "Turn on the dedicated mutations service (smithdb.mutations.enabled)."}
+      - {id: oldest-queued-task, workload: ingest-queue, metric: langsmith_asynq_queue_latency_seconds, where: "platform-backend /metrics (Prometheus text), by queue", threshold: {value: 60, unit: "seconds the oldest task has waited"}, meaning: "A task a minute old says the workers are behind before the backlog count does; LangChain's load test stopped a step at 60 seconds.", action: "Raise ingest-queue's ceiling or its CPU; if Redis memory climbs too, the install is past its sizing."}
+      - {id: expired-runs, workload: ingest-queue, metric: "log:Skipping run as it has expired", where: "ingest-queue logs: Skipping run as it has expired", threshold: {value: 0, unit: "runs skipped, any"}, meaning: "A run whose payload expired in Redis before ingest reached it is skipped and lost with no error.", action: "Keep redisRunsExpirySeconds above the worst backlog and give Redis the memory to hold it (configure.redis)."}
+      - {id: index-failures, workload: smithdb-ingestion, metric: "log:Index construction failed", where: "SmithDB's logs: Index construction failed", threshold: {value: 0, unit: "segments, any"}, meaning: "SmithDB could not build a small segment's indexes, so it never marks the segment ready to merge: it stays in every read of its project. Large documents and many metadata keys are what it indexes.", action: "Read the error in SmithDB's log, and offer it upstream with the run that failed: SmithDB's source calls it a bug."}
+      - {id: pending-segments, workload: smithdb-ingestion, metric: ingest_pending_segment_entry_count, where: "each smithdb-ingestion pod /metrics", threshold: null, meaning: "Segments waiting to flush are rising: ingestion is falling behind its flushes.", action: "Add ingestion pods or memory; check object store latency (object-store-latency)."}
+      - {id: compaction-jobs, workload: smithdb-compaction-worker, metric: compaction_queue_job_count, where: "each smithdb pod /metrics", topology: cluster, threshold: {from: "chart:smithdb.compactionWorker.autoscaling.keda.pendingJobsThreshold", unit: "pending jobs per worker"}, while: {from: "plan:scale.smithdb-compaction-worker.applied.max", unit: "replicas, compaction workers at their ceiling"}, meaning: "Jobs wait while workers cannot grow: compaction is behind.", action: "Raise the worker ceiling or the object store's request budget."}
+      - {id: compaction-oldest-pending, workload: smithdb-compaction-worker, metric: compaction_queue_oldest_pending_created_at_seconds, where: "each smithdb pod /metrics", topology: cluster, threshold: null, meaning: "The oldest pending job's age passing the job timeout means jobs expire before they run; no timeout is set in the chart to compare with.", action: "Add compaction workers."}
+      - {id: compaction-completions, workload: smithdb-compaction-worker, metric: compaction_jobs_executed, where: "each smithdb pod /metrics, by job kind", threshold: null, meaning: "Pending jobs alone cannot tell a backlog that drains slowly from workers that are stuck: a growing queue with completions still rising is catching up, one with completions flat is not.", action: "If pending jobs grow while completions stay flat, read the compaction workers' logs before adding workers."}
+      - {id: metastore-flush, workload: smithdb-ingestion, metric: metastore_batch_flush_duration, where: "each smithdb-ingestion pod /metrics", needs: "SMITHDB_INGESTION__METRICS__MODE=all in smithdb.ingestion.deployment.extraEnv: the chart exports the critical set only", threshold: null, meaning: "Rising metastore flush time means the metastore Postgres is the bottleneck.", action: "Size the metastore (smithdb.metastore) and check its connections."}
+      - {id: admission-queue, workload: smithdb-query, metric: query_admission_queue_length, where: "each smithdb-query and smithdb-stats-query pod /metrics", threshold: {value: 0, unit: "queued queries, sustained"}, meaning: "Queries wait for admission: the pods are full though CPU may look idle.", action: "Add query pods only if the cache hit rate allows; otherwise raise the tier or the per-operation memory limit."}
+      - {id: query-fanout, workload: smithdb-query, metric: query_fanout_limit_exceeded_total, where: "each smithdb pod /metrics", threshold: {value: 0, unit: "queries refused, any"}, meaning: "A query would scan more partitions than SmithDB allows (execution_config.query_fanout.max_partitions, 10,000 by default) and was refused: the API answers 429, \"Too many concurrent partitions\". On a Lite box at 25 runs/s, run stats filtered on feedback were refused 17 times in 213 after an hour of writes.", action: "Read compaction first: many small uncompacted segments raise every scan's partitions. Then narrow the query's time range, or raise the tier."}
+      - {id: object-store-latency, workload: smithdb-ingestion, metric: object_store_op_duration, where: "each smithdb pod /metrics", threshold: null, meaning: "Object store operations slow down: ingestion flushes, compaction and cold reads all wait on it.", action: "Check the object store's request rate limits."}
+      - {id: autoscaler-at-ceiling, workload: each-autoscaled, metric: kube_horizontalpodautoscaler_status_current_replicas, where: "kube-state-metrics, per HorizontalPodAutoscaler", threshold: {per: autoscaled, unit: replicas}, meaning: "The autoscaler has no room left.", action: "Raise the ceiling after reading the workload's own item."}
+      - {id: oom-killed, workload: each, metric: kube_pod_container_status_last_terminated_reason, where: "kube-state-metrics, reason=\"OOMKilled\", per container", threshold: {value: 0, unit: "OOM kills, any"}, meaning: "A pod ran out of memory and restarted, cold: SmithDB is memory bound, and a small ingestion pod measured at 86 runs/s was OOM-killed from 113 runs/s while its CPU looked idle.", action: "Read the workload's own item first; then raise its memory, scale it out, or for SmithDB raise the tier."}
+      - {id: go-cpu-throttling, workload: platform-backend, metric: container_cpu_cfs_throttled_periods_total, where: "cAdvisor: throttled periods over container_cpu_cfs_periods_total", threshold: null, meaning: "A Go pod throttled freezes for the rest of the window; at a 1 CPU limit 98% of windows were throttled.", action: "Keep the CPU limit at go.min_cpu_limit or above."}
+    unit: "items: id, workload, metric, where, threshold, meaning, action"
+    why: "What to watch on a healthy install, each with the number that makes it an alarm only where a parameter, the chart or the plan gives one; an item with no such number is observe, never a guess."
+    source: {kind: decision, ref: "each threshold is another parameter, a chart value or a plan figure; null where no measurement backs one"}
+    by: Reed Bender
+    since: 2026-11-17
+  # Node pools and where each data store runs: the deployable half of the plan
+  pools.overhead:
+    value: 1.2
+    unit: x
+    chart_has_no_key: "the calculator's node overhead; the chart does not know the nodes"
+    why: "What a node keeps for the kubelet, system pods, DaemonSets and bin-packing slack: a pool's requests are multiplied by it once before they are counted in nodes."
+    source: {kind: decision, ref: "PS sizing calculator convention (20%), applied per pool and never twice"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  pools.app_node:
+    value: {cpu: 8, memory_gib: 32}
+    unit: "vCPU, GiB per node"
+    why: "The shape the application pool is counted in: a counting unit, not a provisioning instruction. Replace it with the install's own node through the app_node input."
+    source: {kind: decision, ref: "PS sizing calculator reference shape (the 8 vCPU / 32 GiB class of m5.2xlarge, n2-standard-8, Standard_D8s_v5)"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  pools.smithdb_node:
+    value: {small: {cpu: 16, memory_gib: 64}, medium: {cpu: 32, memory_gib: 128}, large: {cpu: 64, memory_gib: 256}}
+    unit: "vCPU, GiB per node, by SmithDB tier"
+    why: "The shape the dedicated SmithDB pool is counted in, growing with the tier so the tier's largest pod fits (medium query asks 28 vCPU, large ingestion 56). Replace it through the smithdb_node input."
+    source: {kind: decision, ref: "PS sizing calculator reference shapes; not what a module builds"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  pools.app_min_nodes:
+    value: 2
+    unit: nodes
+    chart_has_no_key: "a node-count floor of the calculator; the chart does not know the nodes"
+    why: "Tracing on means at least two application nodes, so the serving pods have somewhere to go when one is lost."
+    source: {kind: decision, ref: "PS sizing calculator convention: Traces on is 2"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  pools.smithdb_min_nodes:
+    value: 2
+    unit: nodes
+    chart_has_no_key: "a node-count floor of the calculator; the chart does not know the nodes"
+    why: "Rollout headroom for the dedicated SmithDB pool; this is a floor of ours, not a Terraform minimum."
+    source: {kind: decision, ref: "PS sizing calculator convention"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  pools.datastores_min_nodes:
+    value: 1
+    unit: nodes
+    chart_has_no_key: "a node-count floor of the calculator; the chart does not know the nodes"
+    why: "A dedicated data-store pool needs one node at least; it is also never below the most instances any one store runs, so replicas of one store sit on separate nodes."
+    source: {kind: decision, ref: "one instance a node, so a node's loss costs one replica of a store"}
+    by: Reed Bender
+    since: 2026-11-17
+  pools.clickhouse_node_shapes:
+    value: [{cpu: 16, memory_gib: 64}, {cpu: 32, memory_gib: 128}]
+    unit: "vCPU, GiB per node, smallest first"
+    why: "The nodes an in-cluster ClickHouse pod is matched against: the guide's per-pod figures top out at 16 vCPU / 32 GiB of requests, and 32 / 128 holds all of them."
+    source: {kind: decision, ref: "PS sizing calculator recommendation, a fit warning's advice and not a pool it counts"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  datastores.operator_instances:
+    value: {survives_node_loss: 3, otherwise: 1}
+    unit: instances
+    why: "An operator runs a primary and two replicas only where the install must survive the loss of a node; otherwise a single instance, so a small install does not pay for replicas it did not ask for."
+    source: {kind: decision, ref: "Dzmitry Dubarau, 2026-11-03: operators run a primary and two replicas only where the install must survive a node's loss"}
+    by: Dzmitry Dubarau
+    since: 2026-11-03
+  datastores.limit_factor:
+    value: 2
+    unit: x requests
+    chart_has_no_key: "how far above its request a store pod's limit sits when no chart pod exists; not a chart setting"
+    why: "The limit of a data store the model sizes, as a multiple of its request: the ratio the chart's own Postgres and Redis StatefulSets use and every Postgres and Redis row of the bare-metal module's production profiles."
+    source: {kind: lab, ref: "upstream/terraform/modules/baremetal/infra/modules/values/datastore-sizes.yaml: postgres_langsmith, postgres_smithdb and redis_langsmith, limits are 2x requests in production and production-large"}
+    by: Reed Bender
+    since: 2026-11-17
+  datastores.redis_maxmemory_share:
+    value: 0.75
+    unit: share of the container's memory limit
+    chart_has_no_key: "Redis's maxmemory as a share of its container limit; the chart sets neither from it"
+    why: "A Redis in the cluster sets maxmemory below its memory limit, so the container is not OOM-killed when the dataset reaches maxmemory; the module uses three quarters."
+    source: {kind: lab, ref: "datastores.tf maxmemory_mb = floor(lim_mem_mi * 3 / 4); 4Gi limit and 3 GiB maxmemory held 50 traces/s of 1-2 MiB traces under noeviction"}
+    by: Reed Bender
+    since: 2026-11-17
+  datastores.redis_sentinel:
+    value: {replicas: 3, cpu: 0.1, memory_gib: 0.125}
+    unit: "pods, vCPU and GiB each"
+    why: "An operator-run Redis that must survive a node's loss runs three Sentinels beside its replicas, as the OpsTree operator's replication-with-Sentinel example sizes them."
+    source: {kind: lab, ref: "datastores.tf redis_sentinel: 3 replicas, 100m and 128Mi (OpsTree redis-operator v0.27.0 example replication_sentinel)"}
+    by: Reed Bender
+    since: 2026-11-17
+  datastores.object_store_pod:
+    value:
+      small: {requests: {cpu: 0.25, memory_gib: 1}, limits: {cpu: 4, memory_gib: 6}}
+      medium: {requests: {cpu: 1, memory_gib: 2}, limits: {cpu: 2, memory_gib: 6}}
+      large: {requests: {cpu: 2, memory_gib: 4}, limits: {cpu: 4, memory_gib: 8}}
+    unit: "vCPU and GiB, by SmithDB tier"
+    why: "An S3-compatible object store in the cluster (RustFS) for SmithDB's bytes. At 2 GiB it was OOM-killed 9 times under 70-80 traces/s of flushes and at 4 GiB it stopped answering its probes at 60 traces/s, so the limit stays at 6 GiB for the small and medium tiers; with a 1-CPU limit the warp benchmark throttled it in 27% of periods. Measured only up to datastores.object_store_measured_traces_per_second."
+    source: {kind: lab, ref: "datastore-sizes.yaml rustfs_smithdb: lab (small), production (medium), production-large (large); OOM and throttling measured under load on the lab cluster"}
+    by: Reed Bender
+    since: 2026-11-17
+  datastores.object_store_measured_traces_per_second:
+    value: 80
+    unit: traces/s
+    chart_has_no_key: "a measurement of the in-cluster store, not a chart setting"
+    why: "The highest load the in-cluster object store was run at: 70 to 80 traces/s of SmithDB flushes. Past it no figure sizes its pod, so a plan whose peak is higher warns."
+    source: {kind: lab, ref: "datastore-sizes.yaml rustfs_smithdb; OOM and throttling measured under load on the lab cluster"}
+    by: Reed Bender
+    since: 2026-11-17
+  smithdb.metastore_disk_gib:
+    value: 50
+    unit: GiB
+    chart_has_no_key: "the metastore runs outside the chart; the modules' default disk"
+    why: "Disk of the SmithDB metastore at every tier: it holds pointers to the objects and not trace payloads, so it does not follow the load. The managed modules default to it, and the GCP one autoresizes from it."
+    source: {kind: decision, ref: "terraform modules aws smithdb_metastore_allocated_storage and gcp smithdb_metastore_disk_size, both 50"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  # Products beyond tracing (products.yaml says what each turns on in the chart). A pod the chart
+  # sizes is read from its render; these are only what neither the chart nor the docs give.
+  products.pods:
+    value:
+      fleet: {apiServer: {cpu: 0.5, memory_gib: 1}, queue: {cpu: 2, memory_gib: 4}, postgres: {cpu: 0.5, memory_gib: 1}, redis: {cpu: 0.25, memory_gib: 0.5}}
+      engineInsightsAgent: {apiServer: {cpu: 0.5, memory_gib: 1}, queue: {cpu: 2, memory_gib: 4}, postgres: {cpu: 0.5, memory_gib: 1}, redis: {cpu: 0.25, memory_gib: 0.5}}
+      polly: {apiServer: {cpu: 0.5, memory_gib: 1}, queue: {cpu: 2, memory_gib: 4}, postgres: {cpu: 0.5, memory_gib: 1}, redis: {cpu: 0.25, memory_gib: 0.5}}
+    unit: "vCPU, GiB requested a pod"
+    chart_has_no_key: "the chart ships resources: {} for these pods, so it has no figure to read; the values set these requests so what runs is what was counted"
+    why: "Requests for the add-on pods the chart leaves unsized: Fleet's, Insights and Engine's shared deployment, and Chat's (Polly's) own API server, queue, Postgres and Redis. Without a request a pod reserves nothing and a plan would count nothing for it."
+    source: {kind: decision, ref: "PS sizing calculator (Enterprise Hub) estimates, labelled as such where the chart sets no resources; the docs publish no figure for them"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  products.limit_over_request:
+    value: 2
+    unit: x
+    chart_has_no_key: "the chart sets no limit for the pods products.pods sizes"
+    why: "The limit of a pod this package gives a request to, as a multiple of the request: the docs' own default for an Agent Server pod with no limit (citation agent_server.limit_default), applied to the other unsized add-on pods alike."
+    source: {kind: decision, ref: "docs data-plane.mdx: a limit defaults to 2x the request"}
+    by: Reed Bender
+    since: 2026-11-18
+  agent_server.load_default:
+    value: ll
+    unit: "read/write column of the docs' Agent Server table"
+    chart_has_no_key: "a load assumption for each deployment; the operator sizes deployments from their own resource_spec"
+    why: "A deployment's read and write load when the person does not say: the docs table's default column, about 5 requests a second each way."
+    source: {kind: decision, ref: "agent-server-scale.mdx, the column marked (default)"}
+    by: Reed Bender
+    since: 2026-11-18
+  sandboxes.concurrent_default:
+    value: 10
+    unit: sandboxes running at once
+    chart_has_no_key: "a load assumption; the chart sizes hosts, not how many sandboxes run"
+    why: "Sandboxes running at the busiest time when the person does not say: a small starting pool; the host count follows the real figure, so ask for it."
+    source: {kind: decision, ref: "no published default; a starting point to replace"}
+    by: Reed Bender
+    since: 2026-11-18
+  sandboxes.vcpu_each:
+    value: 1
+    unit: vCPU a sandbox
+    chart_has_no_key: "a sandbox's size is set by whoever creates it, not by the chart"
+    why: "Committed vCPU a sandbox when the person does not say: one whole core. Hosts are counted from committed vCPU, so this figure sets the pool."
+    source: {kind: decision, ref: "no published default; the docs count hosts from committed vCPU (citation sandboxes.hosts)"}
+    by: Reed Bender
+    since: 2026-11-18
+  pools.sandbox_node:
+    value: {cpu: 16, memory_gib: 64}
+    unit: "vCPU, GiB per node"
+    why: "The KVM node the sandbox pool is counted in, one host pod a node. Replace it with the install's own through the sandbox_node input; a bare-metal or .metal node, or one with nested virtualization."
+    chart_has_no_key: "the chart selects sandbox nodes by label; it has no node shape"
+    source: {kind: decision, ref: "the smallest host in the docs' sandbox scaling table (16, 32 and 64 vCPU hosts)"}
+    by: Reed Bender
+    since: 2026-11-18
+  sandboxes.juicefs_redis:
+    value: {cpu: 2, memory_gib: 5}
+    unit: "vCPU, GiB"
+    chart_has_no_key: "the chart takes the JuiceFS metadata Redis by URL; it does not run or size it"
+    why: "The dedicated Redis that holds JuiceFS metadata for the sandboxes' filesystem; it cannot be shared and must use noeviction (citation sandboxes.juicefs_redis)."
+    source: {kind: decision, ref: "the Terraform module's sandbox JuiceFS Redis default"}
+    by: Dzmitry Dubarau
+    since: 2026-11-13
+  scale_out.measured:
+    value:
+      ingest_cores_per_1k_runs: 21
+      ingest_reference_kib: 128
+      ingest_reference_spread: 2
+      ingest_pod: {cpu: 7, memory_gib: 6}
+      ingest_pod_limit: {cpu: 8, memory_gib: 8}
+      ingest_env: {GOMAXPROCS: 8, GO_INGESTION_CONCURRENCY_PER_CPU: 16}
+      frontend_runs_per_pod: {expected: 5000, ceiling: 2000}
+      api_cores_per_1k_runs: {offloaded: 2.9, inline: 5.0}
+      smithdb_ingestion_runs_per_pod: 4600
+      compaction_runs_per_worker: {kept_up: 30000, drain: 6700}
+      longest_hold: {runs_per_second: 114600, minutes: 21}
+      chart: "0.17.48"
+      postgres_connections_per_pod: 1.0
+      postgres_max_connections_over_used: 2.6
+      offload_ceiling_runs_per_second: 100000
+    unit: "requested vCPU per 1,000 runs/s; runs/s per pod or partition; connections per pod; runs/s"
+    chart_has_no_key: "how a component scales past the docs' tiers; the chart's tiers stop at large"
+    why: "Past the large tier the docs publish nothing, so each component scales with the run rate at what a load test measured. Ingest workers held 19.6k to 202.7k runs/s at about 21 requested vCPU a 1,000 runs/s (run at about half their request) at 128 KB a run, in 7-vCPU pods with GOMAXPROCS 8 and 16 ingestion workers a CPU (ingest_env; the chart's default is 12), which the plan sets wherever it uses that pod; other run sizes follow the ingest curve's ratio, and a mean run more than twice or under half that (ingest_reference_spread) is said to be extrapolated. The API took 2.9 vCPU a 1,000 runs/s with payloads offloaded and up to 5.0 with them in Redis; SmithDB ingestion 4,600 to 6,000 runs/s a 46-vCPU pod (the lowest is used); compaction kept up with 2 workers to 47k and 3 at 114.6k (38,200 runs/s a worker) and fell behind at 202.7k with at most 5 running (40,500 a worker, while a backlog drained), so a worker's ceiling sits near 38,000 and the plan runs one per 30,000 (kept_up), a quarter under it; the autoscaler may reach one per 6,700 (drain), the 30 the test's guide gives as the ceiling at 200k. The frontend proxies every ingest request: the guide plans 8, 16 and 36 frontend pods at 40k, 80k and 200k runs/s, about one per 5,000 (frontend_runs_per_pod expected), with ceilings of 20, 40 and 100, one per 2,000. The 200k rate held 4 minutes after a backlog drained; the longest hold above 50k was 114.6k for 21 minutes (longest_hold). The queue ran 4, 8 and 32 partitions at 50k, 115k and 200k, the first two at about 12,000 runs/s a partition (redis.queue_partitions) and the last with headroom, so partitions stay redis.queue_partitions'. About one Postgres connection a pod was in use, 1,140 at 200k, against 3,000 configured; a default of about 800 ran out near 730 pods. Offloaded payloads at 20 KB threw the object store's 429s near 100k runs/s, so the test kept payloads in Redis above it."
+    source: {kind: load-test, ref: "LangChain engineering load test on GKE, chart 0.17.48, 2026-11: held 19.6k, 47.1k, 114.6k and 202.7k runs/s, about 128 KB a run, 20 runs a trace, no read load; a sandbox cluster, the top rate held 4 minutes; and its guide's planned sizes per step (frontend, compaction ceiling, ingest pod settings), 2026-11-15"}
+    by: Ben Nagengast
+    since: 2026-11-09
+  lite.measured:
+    value:
+      headroom: 1.5
+      memory_headroom: 1.2
+      min_cpu: 0.05
+      workloads:
+        platform-backend: {work: offered, base: 0.003, per_unit: 0.0045, memory_gib: 0.5}
+        ingest-queue: {work: processed, base: 0.025, per_unit: 0.035, memory_gib: 1.1}
+        queue: {work: processed, base: 0.082, per_unit: 0.0058, memory_gib: 1.6}
+        frontend: {work: readers, base: 0.001, per_unit: 0.0214, memory_gib: 0.1}
+        backend: {work: readers, base: 0.013, per_unit: 0.0012, memory_gib: 0.95}
+        playground: {work: fixed, base: 0.005, per_unit: 0, memory_gib: 0.9}
+        ace-backend: {work: fixed, base: 0.001, per_unit: 0, memory_gib: 0.1}
+      stores:
+        postgres: {work: processed, base: 0.005, per_unit: 0.00015, memory_gib: 0.85}
+        smithdb_metastore: {work: processed, base: 0.031, per_unit: 0.0021, memory_gib: 0.3}
+        object_store: {work: processed, base: 0.025, per_unit: 0.02, memory_gib: 7.2}
+    unit: "cores idle (base) and per unit of work (offered or processed runs/s, concurrent readers); GiB a pod at its sampled peak; headroom and memory_headroom x"
+    chart_has_no_key: "what a pod uses at a small load; the chart's requests are sized for its default tier and the docs' for managed services"
+    why: "On one node the chart's requests and the docs' managed-store sizes, not what runs, set the floor: 17 vCPU and 63 GiB where a lab install used 1.6 of 8.4 cores requested at 3.9 traces/s, Postgres asked 11 GiB and used 0.4, and Redis 14.4 and used 0.02. In the extra-lite regime each pod asks what it was measured to use at the plan's load, CPU x headroom and memory at its sampled peak x memory_headroom (a peak sampled at one load, so it gets a buffer as a request), never below min_cpu; Redis asks its payload's memory without the scale guide's 8 GiB floor. SmithDB keeps the chart's tier: one unified SmithDB pod has not been measured at this load."
+    source: {kind: lab, ref: "bare-metal lab runs at 3 runs a trace and about 180 KiB a run, 5 s samples over ten minutes, 2026-10-31 and 2026-11-01 (the bootstrap's spec/capacity.yaml rules); the object store's memory is its peak at 93 traces/s"}
+    by: Reed Bender
+    since: 2026-11-18

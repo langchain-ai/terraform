@@ -13,7 +13,7 @@
 set -euo pipefail
 
 # The providers with a check and plan-tests leg. A new provider goes here.
-PROVIDERS=(aws azure baremetal byoc gcp)
+PROVIDERS=(aws azure baremetal byoc gcp lite)
 
 all=0
 selected=" "
@@ -24,6 +24,9 @@ else
     case "$path" in
       scripts/* | .github/workflows/checks.yaml | .github/scripts/changed-providers.sh)
         all=1 ;;
+      # Lite installs the bare-metal module's datastores chart, so a change there checks Lite too.
+      modules/baremetal/charts/*)
+        selected+="baremetal lite " ;;
       modules/*/*)
         p=${path#modules/}
         selected+="${p%%/*} " ;;

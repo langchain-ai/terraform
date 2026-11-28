@@ -1,0 +1,62 @@
+# The settings most installs change. make up writes terraform.tfvars (gitignored) from its questions;
+# add any of these to it, or copy this file and edit it. variables.tf has every setting and its default.
+# The license key and a tunnel token never go here: make up asks for them and keeps them in
+# infra/.secrets.env (make secrets changes them).
+
+name = "langsmith-lite"
+box  = "s" # xs (2 vCPU, 16 GiB), s (4, 32), m (8, 64), l (16, 64): README.md, Sizes
+
+# Any Linux machine reached over ssh: a server, a VM in any cloud, a VM on a laptop (OPERATE.md, The machine).
+# The user needs sudo only to install and remove k3s. ssh_user and ssh_port default to your ssh config's.
+cloud    = "baremetal"
+ssh_host = "lite.example.internal"
+# ssh_user = "ubuntu"
+# The machine as it is, when it is not the preset's size. make preflight and the install refuse less.
+# machine = { cpu = 8, memory_gi = 32, disk_gi = 256 }
+
+# Or an EC2 instance this module makes (reached as ubuntu).
+# cloud          = "aws"
+# aws_region     = "us-east-1"
+# ssh_public_key = "ssh-ed25519 AAAA... you@laptop"
+# admin_cidrs    = ["203.0.113.7/32"] # your address
+# aws_subnet_id  = "subnet-..."       # unset: the region's default VPC
+# aws_instance_type = "r7i.4xlarge"   # a machine of another shape: set it with machine
+# data_disk_gi         = 200 # the data volume; unset, the plan's volumes plus a fifth
+# backup_snapshot_days = 7   # daily snapshots of the data volume kept; 0 for none
+
+# Or a data disk of its own on a machine you ssh to: its mount point and its size.
+# data_path = "/srv/langsmith"
+# machine   = { cpu = 8, memory_gi = 32, disk_gi = 40, data_disk_gi = 600 }
+
+# Or no machine: the releases, values and Secrets for a Kubernetes cluster you run, one install a
+# namespace, on the cluster's own storage classes (make up writes them; make export again).
+# cloud                 = "cluster"
+# namespace             = "acme-langsmith"         # unset: the install's name
+# ingress_namespaces    = ["ingress-nginx"]        # who may reach LangSmith: the cluster's ingress controller
+# storage_class         = "gp3"
+# scratch_storage_class = "gp3"
+
+# How LangSmith is reached: localhost (default), ip, dns or tunnel (OPERATE.md, Reaching it).
+access = "localhost"
+# domain       = "langsmith.example.com"
+# acme_email   = "ops@example.com" # dns
+# access_cidrs = ["0.0.0.0/0"]     # aws with ip or dns
+
+# How long traces are kept: the largest lever on the disk, and yours to choose. Unset, every plan says
+# it is using these defaults (SIZING.md).
+short_ttl_days = 14
+long_ttl_days  = 30 # 14 or more
+# extended_retention_pct = 5   # the share of traces kept for the long TTL
+# query_hot_days         = 7   # days of SmithDB data the query cache holds
+
+# The load it is sized for; unset, the size's design load.
+# runs_per_second = 5
+# readers         = 2
+# payload_mix_pct = { small = 70, medium = 25, large = 5 }
+# storage_factor  = 1 # 2 to 5 for real text, which compresses worse than the measured payloads
+# max_payload_mb  = 25
+
+# Beyond tracing, each off by default.
+# code_evaluators = true # custom code evaluators (ace-backend)
+
+admin_email = "admin@example.com"

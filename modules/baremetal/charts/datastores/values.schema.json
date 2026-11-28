@@ -12,6 +12,7 @@
     "existingSecrets": { "type": "boolean" },
     "allowedNamespaces": { "type": "array", "items": { "$ref": "#/definitions/name" } },
     "datastoreLabel": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "string" } },
+    "priorityClassName": { "type": "string" },
     "operatorNamespaces": {
       "type": "object",
       "additionalProperties": false,

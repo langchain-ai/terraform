@@ -2,3 +2,6 @@
 !.env.example
 .venv/
 __pycache__/
+# Runs against a real install: their results and logs name its project and load, and never enter git
+/out/
+results*.json

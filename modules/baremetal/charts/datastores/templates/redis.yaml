@@ -102,6 +102,9 @@ spec:
     spec:
       # SIGTERM makes Redis save (RDB) or fsync (AOF) before exiting.
       terminationGracePeriodSeconds: 30
+      {{- with $.Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       affinity:
         podAntiAffinity:
           {{- include "datastores.antiAffinityTerms" $ | nindent 10 }}

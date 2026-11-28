@@ -1,0 +1,25 @@
+why: "Tracing only on one node: every store in the cluster, every serving pod at one replica, a short retention. The smallest install that runs; it does not survive the loss of its node."
+inputs:
+  users: 2
+  peak_traces_per_second: 3
+  traces_per_second: 1
+  runs_per_trace: 10
+  retention_days: 7
+  postgres: statefulset
+  redis: statefulset
+  smithdb_metastore: statefulset
+  object_store: in-cluster
+  trace_store: smithdb
+  survives_node_loss: false
+notes:
+  users: "One or two people reading traces at a time."
+  peak_traces_per_second: "A few traces a second at the busiest minute; past it, lite."
+  traces_per_second: "The busiest rate over the default peak factor of 3."
+  retention_days: "A week keeps the single node's object store small; set what you must keep."
+  redis: "In the cluster, as the bare-metal module runs it."
+  postgres: "In the cluster, as the bare-metal module runs it."
+  smithdb_metastore: "In the cluster, as the bare-metal module runs it."
+  object_store: "An S3-compatible store in the cluster, as the bare-metal module runs it."
+  runs_per_trace: "The model's default of 10 runs a trace, stated so the plan does not move if the default does."
+  trace_store: "SmithDB alone: ClickHouse is the deprecated store and is sized only while a migration runs."
+  survives_node_loss: "A single failure domain is accepted for this load."
