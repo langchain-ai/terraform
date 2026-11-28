@@ -1,0 +1,51 @@
+# make experiment's step variants. A step is a multiple of the size's design rate, or a multiple and one
+# of these, written <multiple>:<variant>: STEPS="1 1 1:projects 1:coding". Each changes one thing from
+# the experiment's own traffic, so a step differs from the plain step before it in that alone; customer
+# changes three at once, after each has been seen apart.
+#
+#   what            said as the step starts
+#   flags           the load test's own flags for this step
+#   traces          the traces this step sends in place of the experiment's TRACES
+#   minutes         this step's length in place of MINUTES
+#   stall_seconds   ingest-queue stopped for this long, two minutes after the ramp, then started again
+#
+# Every number cites what it stands for: our first three experiments sent one project, no metadata, and
+# an application's traces, and SmithDB's source scales its work with each of those (learnings.md, 4b).
+
+projects:
+  what: the runs spread over 50 projects, the busiest taking a fifth (Zipf 1)
+  # SmithDB writes a small segment a partition (a project on a day) every flush, so 50 active projects
+  # hold up to 50 times the files waiting for their merge. LangChain's 200,000 runs/s load test spread
+  # its runs over 200 projects at a skew of 1; one Apple workspace was 31% of its peak.
+  flags: --projects 50 --project-skew 1
+
+metadata:
+  what: 37 metadata keys a run
+  # SmithDB indexes every metadata key path with no cap. LangChain's production coding agent carries 23
+  # at the median, 86 at p95 and 37 on average (SmithDB runs export, 2026-11-21 to 26).
+  flags: --metadata-keys 37
+
+coding:
+  what: a coding agent's traces, for 30 minutes
+  # About 1,300 runs a trace, so at box s's 5 runs/s a trace starts every four minutes: ten minutes
+  # would be two or three traces. load.coding_trace has the calibration.
+  traces: coding
+  minutes: 30
+
+customer:
+  what: a coding agent's traces over 50 projects with 37 metadata keys, for 30 minutes
+  traces: coding
+  flags: --projects 50 --project-skew 1 --metadata-keys 37
+  minutes: 30
+
+stall:
+  what: ingest-queue stopped for ten minutes mid-step, then started again, over 30 minutes
+  # How Redis grows while nothing drains it, and how long the backlog takes to clear: the stall
+  # buffer's size (redis.stall_hours) was set without either being measured.
+  stall_seconds: 600
+  minutes: 30
+
+long:
+  what: two hours
+  # Ten-minute steps showed neither SmithDB's memory settling nor compaction over many windows.
+  minutes: 120

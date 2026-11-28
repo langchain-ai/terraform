@@ -23,11 +23,14 @@ pinned_charts() {
 for n, c in json.loads(sys.argv[1])["charts"].items(): print(n, c["repo"], c["chart"], c["version"])' "$1"
 }
 
-# Writes infra/resolved.auto.tfvars.json and build/charts/datastores-*.tgz.
+# Writes infra/resolved.auto.tfvars.json and build/charts/datastores-*.tgz. VERSIONS_FROM, an earlier
+# resolved file, holds each chart to the exact version it names: an experiment's sizes otherwise each
+# resolve the line again, and its l ran a LangSmith release a day newer than its s and m (magus, 2026-11-27).
 resolve_versions() {
   local pins lines="" name repo chart line meta version release scrape_url tmp
   pins="$(pins_json)"
   while read -r name repo chart line; do
+    [[ -n "${VERSIONS_FROM:-}" ]] && line="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["resolved"]["charts"][sys.argv[2]])' "$VERSIONS_FROM" "$name")"
     meta="$(helm show chart --repo "$repo" "$chart" --version "$line" 2>/dev/null)" \
       || fail "$chart: no release of line $line in $repo" "check the line in infra/pins.yaml, or the network."
     version="$(chart_field version <<<"$meta")"

@@ -53,11 +53,14 @@ output "plan" {
       snapshot_days = var.cloud == "aws" ? var.backup_snapshot_days : 0
     }
     volumes_gi = local.volumes
+    # The merge timing: make compare lists it beside the requests when an experiment changes it.
+    smithdb_merge = var.smithdb_merge
     data = {
       runs_a_day               = floor(local.runs_a_day)
       kb_a_run                 = local.kb
       redis_maxmemory_mi       = local.redis_maxmemory_mi
-      redis_stall_hours        = var.redis_runs_expiry_hours
+      redis_expiry_hours       = var.redis_runs_expiry_hours
+      redis_stall_hours        = local.rd.stall_hours
       postgres_max_connections = local.postgres_max_connections
     }
     retention = {

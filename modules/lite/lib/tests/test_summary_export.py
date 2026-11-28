@@ -20,7 +20,7 @@ def plan(cloud: str = "baremetal", set_by_person: bool = True, cost: bool = Fals
         "box": "m", "machine": {"cpu": 8, "memory_gi": 64, "disk_gi": 640}, "runs_per_second": 25, "readers": 5,
         "requested": {"cpu_m": 5367, "mem_mi": 25700}, "allowed": {"cpu_m": 6162, "mem_mi": 53964},
         "disks": {"volumes_gi": 468, "data_separate": cloud == "aws", "data_gi": 590, "data_mount": "/data", "used_pct": 79, "snapshot_days": 7 if cloud == "aws" else 0},
-        "data": {"runs_a_day": 720000, "redis_maxmemory_mi": 5433, "redis_stall_hours": 6, "postgres_max_connections": 200},
+        "data": {"runs_a_day": 720000, "redis_maxmemory_mi": 5433, "redis_expiry_hours": 6, "redis_stall_hours": 1, "kb_a_run": {"redis": 8.115}, "postgres_max_connections": 200},
         "volumes_gi": {"object_store": 354, "smithdb_cache": 68, "postgres": 20, "redis": 6, "prometheus": 20},
         "retention": {"short_days": 14, "long_days": 30, "extended_pct": 5, "metrics_days": 15, "set_by_person": set_by_person},
         "features": {"observability": True, "mission_control": True, "code_evaluators": False, "tunnel": False, "k3s": True},

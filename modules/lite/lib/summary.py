@@ -51,7 +51,8 @@ def stores(p: dict, cloud: str) -> None:
         where = f"a data disk of {disks['data_gi']} GiB at {disks['data_mount']}" if disks["data_separate"] else f"the system's {p['machine']['disk_gi']} GiB disk"
         snap = f"; daily snapshots kept {disks['snapshot_days']} days" if disks["snapshot_days"] else ""
         field("disk", f"on {where}, {disks['used_pct']}% used{snap}")
-    field("redis", f"{data['redis_maxmemory_mi'] / 1024:.1f} GiB maxmemory, reserved: {data['redis_stall_hours']} h of stalled ingest at the peak")
+    field("redis", f"{data['redis_maxmemory_mi'] / 1024:.1f} GiB maxmemory: a record a run for {data['redis_expiry_hours']} h, "
+          f"and {data['redis_stall_hours']} h of {data['kb_a_run']['redis']} KB payloads at the peak if ingest stalls")
     field("postgres", f"max_connections {data['postgres_max_connections']}")
 
 

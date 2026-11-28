@@ -31,8 +31,8 @@ cmd_soak() {
   local extra=(--runs-per-second "$rate" --readers "$readers" --duration "${DURATION:-900}" --ramp "${RAMP:-120}")
   [[ "${STEP:-}" == 1 ]] && extra+=(--step)
   traces_field
-  # shellcheck disable=SC2046  # the flags split on spaces, as typed
-  prove soak "${extra[@]}" $(traces_flags) || exit 1
+  # shellcheck disable=SC2046,SC2086  # the flags split on spaces, as typed
+  prove soak "${extra[@]}" $(traces_flags) ${LOADTEST_FLAGS:-} || exit 1
 }
 
 # TRACES: the traces verify, soak and every experiment step send, the load test's --traces.
@@ -40,21 +40,23 @@ cmd_soak() {
 #   agent   an application's traces, as customers send them: mostly one model call, a third an agent that
 #           calls tools for several turns, every model call resending the conversation so far (the load
 #           test's payloads/agent.py, calibrated in params.yaml's load.agent_trace)
+#   coding  a coding agent's: every trace calls tools for dozens of turns, its context grown to hundreds of
+#           KB a model call and then compacted (load.coding_trace, provisional until measured)
 # verify and soak send simple unless TRACES says otherwise; an experiment sends agent, as it measures
 # what a size holds for real traffic. The first experiment's simple traces put 34 KiB a run in blob
 # storage and 86 in SmithDB's segments on box l, against 25.7 KB the plan budgets (magus, 2026-11-26).
 # Checked here, in the verb's own shell: a fail inside $(traces_flags) would end only its subshell.
 traces_field() {
   case "${TRACES:-simple}" in
-    simple | agent) field "traces" "${TRACES:-simple}" ;;
-    *) fail "TRACES is simple or agent, not $TRACES" "simple: the quick test traces; agent: an application's realistic ones." ;;
+    simple | agent | coding) field "traces" "${TRACES:-simple}" ;;
+    *) fail "TRACES is simple, agent or coding, not $TRACES" "simple: the quick test traces; agent: an application's realistic ones; coding: a coding agent's." ;;
   esac
 }
 traces_flags() { [[ -z "${TRACES:-}" ]] || printf -- '--traces %s' "$TRACES"; }
 
 prove() {
   need terraform python3 ssh kubectl uv
-  local mode="$1" ns work kport wport logins
+  local mode="$1" ns work kport wport logins STALL_PID=""
   shift
   ns="$(tf_output namespaces)"
   logins="$(tf_output logins)"
@@ -84,6 +86,11 @@ prove() {
   run forward "a tunnel to LangSmith's frontend" wait_for grep -q '^Forwarding from 127.0.0.1:' "$work/port-forward.log"
   wport="$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) .*/\1/p' "$work/port-forward.log" | head -1)"
   run frontend "LangSmith answers through it" wait_for curl -sf -o /dev/null "http://127.0.0.1:$wport/api/v1/info"
+  if [[ -n "${STALL_SECONDS:-}" ]]; then
+    field "stall" "ingest-queue stopped for $(minutes "$STALL_SECONDS") from $(minutes $((${RAMP:-120} + 120))) in"
+    stall_ingest "$(json_get langsmith <<<"$ns")" "$((${RAMP:-120} + 120))" "$STALL_SECONDS" "$work/stall.log" &
+    STALL_PID="$!"
+  fi
   printf '\n'
   # CPU through the install's own Prometheus: the operator's kubeconfig cannot reach the kubelet, by design.
   # The +-expansion: bash 3.2, macOS's, calls an empty array unbound under set -u.
@@ -95,9 +102,33 @@ prove() {
     --namespace "$(json_get langsmith <<<"$ns")" --data-namespace "$(json_get data <<<"$ns")" ${prometheus[@]+"${prometheus[@]}"} \
     --loadtest "$LITE/../../utils/langsmith-load-test" --out "$work" "$@"
   local status=$?
+  # The stall ends inside the step (check_steps), so this waits on nothing; were the load to stop early,
+  # it waits for ingest-queue to be started again rather than leave it stopped.
+  [[ -n "${STALL_PID:-}" ]] && wait "$STALL_PID"
   # The load test's own last line says what held and what did not; this adds where the run is kept.
   field "results" "${work#"$LITE"/}"
   return "$status"
+}
+
+# ingest-queue stopped mid-step and started again, each moment written to the step's stall.log: how Redis
+# grows while nothing drains it and how long the backlog takes to clear, both unmeasured until now. Its
+# replicas are put back when the step is stopped part way too. A Ctrl-C that also ends the ssh tunnel first
+# can leave it stopped: the stall.log then ends at "stopped", and
+#   kubectl -n <namespace> scale deploy/langsmith-ingest-queue --replicas=1
+# starts it again (make pods shows it at 0).
+stall_ingest() {
+  local ns="$1" after="$2" seconds="$3" log="$4" deploy="deploy/langsmith-ingest-queue" replicas
+  sleep "$after"
+  replicas="$(kubectl -n "$ns" get "$deploy" -o jsonpath='{.spec.replicas}')" || return 1
+  # shellcheck disable=SC2064  # $replicas expanded now
+  trap "kubectl -n '$ns' scale '$deploy' --replicas='$replicas' >/dev/null && echo \"\$(date -u +%s) started\" >>'$log'" EXIT
+  trap 'exit 1' INT TERM
+  echo "$(date -u +%s) stopped" >>"$log"
+  kubectl -n "$ns" scale "$deploy" --replicas=0 >/dev/null
+  # Waited on, not slept in the foreground: bash runs a trap only once a foreground command ends, and a
+  # stall stopped part way kept ingest-queue stopped until its whole sleep was out (a fake kubectl, 2026-11-28).
+  sleep "$seconds" &
+  wait "$!"
 }
 
 minutes() { python3 -c "s = $1; print(f'{s / 60:g} minutes' if s % 60 == 0 else f'{s:g} s')"; }
@@ -113,7 +144,9 @@ cmd_experiment() {
   out="$(experiment_folder)" || exit 1
   sizes="$(experiment_setting "$out" SIZES)" steps="$(experiment_setting "$out" STEPS)" minutes="$(experiment_setting "$out" MINUTES)"
   traces="$(experiment_setting "$out" TRACES)"
-  heading "experiment" "each size from no data, held to its machine: verify, then $minutes minutes at ${steps// /, } times its design rate"
+  STEP_VARIANTS="$(step_variants)" || exit 1
+  check_steps "$steps" "$minutes" || exit 1
+  heading "experiment" "each size from no data, held to its machine: verify, then $minutes minutes a step: ${steps// /, }"
   field "sizes" "$sizes"
   TRACES="$traces" traces_field
   for size in $sizes; do [[ -e "$out/$size/finished" ]] && field "$size" "finished earlier: kept"; done
@@ -164,6 +197,28 @@ experiment_folder() {
   echo "$out"
 }
 
+# lib/steps.yaml as JSON, through Terraform's YAML reader as infra/pins.yaml is, so no YAML library is needed.
+step_variants() { tf_eval 'yamldecode(file("../lib/steps.yaml"))' || fail "could not read lib/steps.yaml" "check it is valid YAML."; }
+
+# Every step a multiple, or a multiple and a variant lib/steps.yaml defines: checked before any size is
+# deleted, so a typo stops the experiment, not its third size an hour in.
+check_steps() {
+  python3 -c 'import json, re, sys
+variants, names = json.loads(sys.argv[1]), ", ".join(json.loads(sys.argv[1]))
+for step in sys.argv[2].split():
+    m = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)(?::([a-z]+))?", step)
+    if not m or (m[2] and m[2] not in variants):
+        sys.exit(f"  ERROR  step {step!r}: a multiple (2, 1.5), or a multiple and one of {names} (2:projects)")
+    v = variants.get(m[2]) or {}
+    if v.get("stall_seconds") and 240 + v["stall_seconds"] >= 60 * v.get("minutes", int(sys.argv[3])):
+        sys.exit(f"  ERROR  step {step!r}: its stall must end before the step does")' "$STEP_VARIANTS" "$1" "$2"
+}
+
+# A step's variant setting, empty when it has none.
+step_setting() {
+  python3 -c 'import json, sys; print((json.loads(sys.argv[1]).get(sys.argv[2]) or {}).get(sys.argv[3], ""))' "$STEP_VARIANTS" "$1" "$2"
+}
+
 experiment_setting() { awk -F= -v k="$2" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$1/settings"; }
 
 experiment_size() {
@@ -174,7 +229,11 @@ experiment_size() {
   # From no data on the same k3s: the box keeps k3s and every image it pulled, and each size costs one
   # root step, not a down and an up (two touches, k3s installed again and every image pulled again).
   # The cap rides on this up alone, never saved: the next plain make up lifts it.
-  box="$size" TF_VAR_emulate_machine=true FRESH=1 CONFIRM="$name" YES=1 "$LITE/bin/lite" up || { echo install >"$dir/stopped"; return 1; }
+  # Every size runs the versions the first one resolved, so the sizes differ in their size alone.
+  local versions="${dir%/*}/versions.json" from=()
+  [[ -e "$versions" ]] && from=(VERSIONS_FROM="$versions")
+  env ${from[@]+"${from[@]}"} box="$size" TF_VAR_emulate_machine=true FRESH=1 CONFIRM="$name" YES=1 "$LITE/bin/lite" up || { echo install >"$dir/stopped"; return 1; }
+  [[ -e "$versions" ]] || cp "$INFRA/resolved.auto.tfvars.json" "$versions"
   TRACES="$traces" OUT="$dir/verify" "$LITE/bin/lite" verify || { echo verify >"$dir/stopped"; return 1; }
   # The plan the size ran with, beside its steps: make compare sets what each workload used against what
   # it asked, and an experiment run after the sizing changed must be read against its own plan.
@@ -183,11 +242,19 @@ experiment_size() {
   # Each step's folder is numbered in order, as a multiple can repeat: STEPS 1 1 2 3 runs 1x again once
   # the install has warmed, so a first step slower than the second is the fresh install, not the load. The
   # first experiment's first steps after a fresh install were each size's slowest (magus, 2026-11-26).
-  for k in $steps; do
+  local step k variant what step_traces step_minutes
+  for step in $steps; do
     i=$((i + 1))
-    # A step that does not hold still runs the next: where each one fails is what this measures.
-    RATE="$(python3 -c "print(f'{$design * $k:g}')")" DURATION="$((minutes * 60))" TRACES="$traces" OUT="$dir/$i-${k}x" "$LITE/bin/lite" soak ||
-      warn "$size at ${k}x (step $i) did not hold; the next step still runs"
+    k="${step%%:*}" variant=""
+    [[ "$step" == *:* ]] && variant="${step#*:}"
+    what="$(step_setting "$variant" what)" step_traces="$(step_setting "$variant" traces)" step_minutes="$(step_setting "$variant" minutes)"
+    [[ -n "$what" ]] && field "step $i" "${k}x, $what"
+    # A step that does not hold still runs the next: where each one fails is what this measures. A stall
+    # step does not hold by design; what it measures is Redis's growth and how long the backlog took.
+    RATE="$(python3 -c "print(f'{$design * $k:g}')")" DURATION="$((${step_minutes:-$minutes} * 60))" TRACES="${step_traces:-$traces}" \
+      LOADTEST_FLAGS="$(step_setting "$variant" flags)" STALL_SECONDS="$(step_setting "$variant" stall_seconds)" \
+      OUT="$dir/$i-${k}x${variant:+-$variant}" "$LITE/bin/lite" soak ||
+      warn "$size at $step (step $i) did not hold; the next step still runs"
   done
   heading "experiment" "size $size: what it held, and what it took"
   report "$dir/report" "$dir"/*x/ --design "$design"
