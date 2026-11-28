@@ -9,8 +9,9 @@ values and Secrets for a Kubernetes cluster you already run, one install a names
 wants its own LangSmith on one machine, for many isolated installs (one a customer), and for anyone who
 needs a LangSmith to test against.
 
-It has run on one machine so far, magus, an Arch-family server, where every size stored all of 700,309
-runs at 1 to 3 times its design rate, and the sizing now follows what those runs used ([SIZING.md, What
+It has run on one machine so far, magus, an Arch-family server, where every one of 1,079,858
+runs sent at 1 to 3 times each size's design rate was stored, the sizing follows what those runs used,
+and on it every size held 3 times its design rate ([SIZING.md, What
 the experiments measured](SIZING.md#what-the-experiments-measured);
 [OPERATE.md](OPERATE.md#what-the-first-install-confirms) has what the first installs still confirm). It is
 **not** highly available (the box is one failure domain), **not** a production blueprint, and **not** an

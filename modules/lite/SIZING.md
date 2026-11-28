@@ -6,7 +6,8 @@ Every pod and volume follows from two choices: the load (`box`, or `runs_per_sec
 (`short_ttl_days`, `long_ttl_days`). The data is [`infra/sizes.yaml`](infra/sizes.yaml), the arithmetic
 [`infra/sizing.tf`](infra/sizing.tf), whose blocks follow this page's computation in order and by name.
 `make plan` prints the result and refuses a machine that cannot hold it, before any machine exists. The
-numbers come from two experiments that took every size to three times its design rate
+numbers come from two experiments that took every size to three times its design rate, and a third that
+ran the resulting plan and held three times at every size
 ([What the experiments measured](#what-the-experiments-measured)).
 
 ## The computation
@@ -188,7 +189,7 @@ slows as they pile up:
 
 | Most segments waiting in a step | Steps | Opening a trace, p99 |
 |:--|--:|:--|
-| under 300 | 10 | 0.07 to 2.0 s |
+| under 300 | 26 | 0.05 to 2.0 s |
 | 300 to 420 | 10 | 0.7 to 3.3 s |
 | 420 to 527 | 8 | 0.5 to 17.8 s; four past the 5 s target |
 
@@ -203,10 +204,17 @@ oldest 59 s). At high rates the 25,000 rows come first and the pile stays smalle
 refused (HTTP 429), which protects SmithDB's memory: at `l`, 2x, 80 trace reads were.
 
 Lite merges every 4 minutes, with 30 seconds of jitter, checked every 30 seconds, and writes a small
-segment at most every second (`smithdb_merge`), which bounds the pile near 300 at any rate. The cost is
-more L1 segments for SmithDB's compaction to combine later; at Lite's rates its queue never held a
-pending job. LangChain's SmithDB team set the same 4-minute timer for a larger LangSmith whose segments
-piled up, in 2026-11.
+segment at most every second (`smithdb_merge`). Run the same way as before, it merged once every 4.7
+minutes of load instead of every 10.7, and the pile never passed 223:
+
+<img alt="Each step of agent traces on the first plan and on the measured plan, side by side: the most segments waiting fell at every size and step, from up to 527 to at most 223; the slowest trace read at p99 from 17.8 s to 1.65 s, every step inside the 5 s target; sent to readable at p99 from up to 65 s to at most 9.2 s." src="diagrams/experiments/change.png">
+
+Every step's trace reads stayed within 1.65 s, and the merge no longer stalled ingest: at `s`, 3x, the
+oldest ingest task waited 0.8 s, not 59. The two settings moved together and both shrink the pile, the
+timer by how long segments wait and the flush by how many there are, so these runs do not separate them.
+The cost, more L1 segments for SmithDB's compaction to combine later, did not show: compaction ran 28
+jobs at `s` instead of 20, and its queue held at most one. LangChain's SmithDB team set the same 4-minute
+timer for a larger LangSmith whose segments piled up, in 2026-11.
 
 ## The retention
 
@@ -228,24 +236,36 @@ a long TTL under 14 days, and so does the plan.
 
 `make experiment` installs each size from no data on one machine, holds every pod to the size's machine
 (`emulate_machine`), and soaks it ten minutes a step; `make compare` draws every experiment on one scale.
-Two ran on one server (a 32-core Threadripper, 93 GiB, a PCIe 5 NVMe), chart 0.18, on 2026-11-26: the
-load test's simple traces at 1, 2 and 3 times each size's design rate, then agent traces, shaped and
-sized as an application's are (the load test's README, Agent traces), at 1 twice, 2 and 3 times.
+Its two figures here and the step-by-step numbers behind them are in
+[`diagrams/experiments`](diagrams/experiments) (`steps.csv`, a row a step); the experiment folders they
+were drawn from are not in the repository.
+Three ran on one server (a 32-core Threadripper, 93 GiB, a PCIe 5 NVMe), chart 0.18. On 2026-11-26, on
+the first plan: the load test's simple traces at 1, 2 and 3 times each size's design rate, then agent
+traces, shaped and sized as an application's are (the load test's README, Agent traces), at 1 twice, 2
+and 3 times. On 2026-11-27, the plan below, with agent traces, the same steps.
 
-- **Nothing was lost:** all 700,309 runs sent were stored, with no restart and no pod killed for memory.
+<img alt="Every step of the three experiments, newest first: on the measured plan every size held 1, 2 and 3 times its design rate; on the first plan with agent traces s and l failed at 2 and 3 times on slow or refused reads; with simple traces l failed its first step after a fresh install." src="diagrams/experiments/scorecard.png">
+
+- **Nothing was lost:** all 1,079,858 runs sent were stored, with no restart and no pod killed for memory.
 - **The services follow the rate in a straight line, at a fraction of what was planned:** ingest-queue
   6.9 millicores a run/s in simple traces and 4.0 in agent traces, against 35 planned; platform-backend
   1.0 against 4.5; queue flat at 0.13 cores. The plan now uses the heavier of each.
-- **Redis held a record, not a payload:** 1.56 to 1.73 KiB a run across 28 steps, against the 8.1 KB a
-  run the plan held for 6 hours ([Each store](#each-store)). Redis used 0.4 GiB at most, of 14 reserved.
+- **Redis held a record, not a payload:** 1.56 to 1.77 KiB a run across 44 steps, against the 8.1 KB a
+  run the first plan held for 6 hours ([Each store](#each-store)). Redis used 0.4 GiB at most, of 14
+  reserved; on the plan below, 0.4 of 5.0. A ten-minute step cannot fill Redis: at 1x for the full 6-hour
+  expiry the records fill about a third of maxmemory at every size, and the rest is the stall's hour of
+  payloads at the average mix's 8.1 KB a run. Larger payloads get less: agent traces' 34.5 KiB a run
+  would have about half an hour.
 - **Every pod together used at most 58% of a size's vCPU** in its busiest minute and 27% of its memory.
   The busiest minutes were a fresh install's first (Postgres takes up to 1.6 cores for ten minutes, then
   0.02 to 0.05) and the minute before a merge, when SmithDB's reads of the pile took up to 1.75 times
   its CPU request.
 - **Reads slowed before anything else,** with the pile of segments waiting to merge, not with the
   machine ([SmithDB's merges](#smithdbs-merges)).
-- **SmithDB's memory climbed toward its limit** at `s` (4.6 of 6 GiB); at `m` and `l` it stayed under
-  half. RustFS peaked at 0.8 GiB at `s`, past its 768 MiB request, and at 1.2 GiB at `m` and `l`.
+- **SmithDB's memory climbed toward its limit** at `s` on the first plan (4.6 of 6 GiB); at `m` and `l`
+  it stayed under half. With the shorter merge it peaked at 2.7, 3.5 and 3.6 GiB at `s`, `m` and `l`, but
+  was still rising slowly when each size's 48 minutes ended. RustFS peaked at 0.8 GiB at `s`, past its 768
+  MiB request, and at 1.2 GiB at `m` and `l`.
 - **A run kept 29 KB at rest in agent traces** on box `l` (blobs 14.3, SmithDB's segments 14.8), within
   the 25.7 KB budgeted x 1.2; the simple traces' one large field a side kept 89 to 120 KiB.
 - **The first 1x after a fresh install is not slower by a rule:** a second 1x on the same install moved
@@ -264,13 +284,27 @@ What the plan changed, with these runs cited (`infra/sizes.yaml`):
 | SmithDB's merge timer | 10 minutes + up to 3 | 4 minutes + up to 30 s |
 
 What these runs cannot say: each core is a desktop Threadripper's, faster than a cloud vCPU; the disk is
-a PCIe 5 NVMe, never held to a cloud disk's throughput; and ten-minute steps show neither the object
-store after a TTL's expiry nor SmithDB's memory after hours. The next experiment runs this plan the same
-way, so the three compare step for step.
+a PCIe 5 NVMe, never held to a cloud disk's throughput; ten-minute steps are one sample each and show
+neither the object store after a TTL's expiry, Redis at its expiry, nor SmithDB's memory after hours; and
+every size held 3x, so where each one stops is not yet measured.
+
+What these runs sent is lighter than much real traffic, and the sizes are measured for it alone: one
+project, no metadata, and an application's traces of 4 runs at the median and 34.5 KiB a run. At 3 times
+its design rate box `l` used 3.3 of its 12.8 allowed cores and took 5.7 MiB/s of payload, so for this
+traffic every size has room to spare. Real traffic adds what SmithDB's work scales with: many projects
+(each writes its own small segments), many metadata keys (each indexed), and long traces with large
+fields. LangChain's own coding agent in production sends about 1,300 runs a trace, nearly all tiny, with
+model calls of 300 KB at the median and up to 19 MB, and 23 metadata keys a run at the median. The load
+test sends that shape (`--traces coding`), and an experiment can change one of these things a step
+(OPERATE.md, `make experiment`); until such an experiment has run, treat each size's rate as holding for
+traffic like the experiments', not for a coding agent's. LangSmith's build moved during the
+experiments (the chart line resolves to a new build most days): the first plan and the measured plan ran
+the same build at `s` and `m`, and a build a day newer at `l`. An experiment now holds every size to the
+versions its first size resolved.
 
 | Number | Source |
 |:--|:--|
-| LangSmith's services (idle and per-unit cores, memory) | the two experiments above; frontend and backend, which follow readers, the bare-metal lab (2026-10-31, 2026-11-01, Reed Bender) |
+| LangSmith's services (idle and per-unit cores, memory) | the first two experiments above; frontend and backend, which follow readers, the bare-metal lab (2026-10-31, 2026-11-01, Reed Bender) |
 | The 2-CPU limit on the Go services | ingest-queue throttled in 98% of periods under 1 CPU at 4.3 traces/s (2026-10-22; terraform#513, Michael Frederick); its workers follow the limit (Dzmitry Dubarau, 2026-10-12) |
 | What a run costs in each store | LangChain's trace payload measurements and load tests of LangSmith 0.17.6 with SmithDB (2026-11, Dzmitry Dubarau) |
 | Redis's record a run, the hour of payloads | the experiments above; LangChain's load test at 20,000 to 200,000 runs/s; the sizing calculator's `redis.trimmed_kb_per_run` and `redis.stall_hours` |
